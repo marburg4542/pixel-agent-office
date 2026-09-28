@@ -1,0 +1,139 @@
+import type { State } from '../store';
+import { engine, type AgentRT } from '../sim/engine';
+import { COLUMNS } from '../data/board';
+import { getSprite } from '../sprites/character';
+import { PROVIDERS } from '../data/models';
+import { roleById } from '../data/roles';
+import { NOTE_COLORS } from '../data/seed';
+import { translate } from '../i18n';
+import { BOARD, DESKS, NOTES_AREA, inRect, seatOf, type Pt } from './layout';
+import {
+  drawBoard, drawBubble, drawCabinet, drawChair, drawClockHands, drawDesk, drawEnvelope, drawPaper,
+  drawPlant, drawProgress, drawWallNotes, drawWaterCooler, drawWindows, rect, text,
+} from './office';
+
+export type HoverTarget = { kind: 'agent'; id: string } | { kind: 'board' } | { kind: 'desk'; index: number };
+
+const PRIO = { high: 0, med: 1, low: 2 } as const;
+
+export function renderScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElement, s: State, hover: HoverTarget | null): void {
+  const t = engine.realTime;
+  const now = new Date();
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(bg, 0, 0);
+  drawWindows(ctx, now, t);
+  drawClockHands(ctx, now);
+
+  const columns = COLUMNS.map((id) => ({
+    id,
+    cards: s.tasks
+      .filter((x) => x.column === id)
+      .sort((a, b) => PRIO[a.priority] - PRIO[b.priority])
+      .map((x) => ({ priority: x.priority, active: x.active })),
+  }));
+  drawBoard(ctx, columns, translate(s.lang, 'board'), hover?.kind === 'board', t);
+  drawWallNotes(
+    ctx,
+    s.notes.map((n) => ({
+      color: NOTE_COLORS[n.color] ?? NOTE_COLORS[0],
+      unread: n.to === 'all' ? s.agents.some((a) => !n.readBy.includes(a.id)) : !n.readBy.includes(n.to),
+    })),
+    t,
+  );
+
+  // Depth-sorted scene objects
+  const items: { y: number; draw: () => void }[] = [];
+  const byDesk = new Map(s.agents.map((a) => [a.desk, a]));
+  for (const d of DESKS) {
+    const a = byDesk.get(d.index);
+    const seat = seatOf(d);
+    const rt = a && engine.agents.get(a.id);
+    const model = a && s.models.find((m) => m.id === a.modelId);
+    items.push({ y: seat.y - 0.5, draw: () => drawChair(ctx, seat.x, seat.y) });
+    items.push({
+      y: d.y,
+      draw: () =>
+        drawDesk(ctx, d, {
+          empty: !a,
+          name: a?.name,
+          roleColor: a ? roleById(a.role).color : undefined,
+          provider: model ? PROVIDERS[model.provider] : undefined,
+          working: rt?.status === 'working',
+          queue: a ? engine.queueFor(a.id).length : 0,
+          hover: hover?.kind === 'desk' && hover.index === d.index,
+          t,
+        }),
+    });
+  }
+  for (const a of s.agents) {
+    const rt = engine.agents.get(a.id);
+    if (rt) items.push({ y: rt.y, draw: () => drawAgent(ctx, a.look, rt, t) });
+  }
+  items.push({ y: 90, draw: () => drawPlant(ctx, 14, 90, true) });
+  items.push({ y: 90, draw: () => drawPlant(ctx, 386, 90, true) });
+  items.push({ y: 172, draw: () => drawCabinet(ctx, 14, 172) });
+  items.push({ y: 172, draw: () => drawWaterCooler(ctx, 388, 172, t) });
+  items.push({ y: 222, draw: () => drawPlant(ctx, 12, 222, false) });
+  items.push({ y: 222, draw: () => drawPlant(ctx, 390, 222, false) });
+  items.sort((a, b) => a.y - b.y).forEach((i) => i.draw());
+
+  // Overlays (always on top)
+  for (const a of s.agents) {
+    const rt = engine.agents.get(a.id);
+    if (!rt) continue;
+    const head = Math.round(rt.y - 26);
+    let top = head;
+    if (rt.status === 'working' && rt.work) {
+      drawProgress(ctx, rt.x, head - 9, rt.work.progress, roleById(a.role).color);
+      top = head - 9;
+    }
+    if (rt.bubble) drawBubble(ctx, rt.x, top, rt.bubble.text);
+    else if (engine.unreadNotes(a.id).length) drawEnvelope(ctx, rt.x + 5, top - 8 + Math.round(Math.sin(t * 4)));
+    else if (rt.status === 'idle' && rt.idleT > 20) {
+      const k = (t * 0.8) % 1;
+      text(ctx, 'z', rt.x + 6 + k * 3, head - 2 - k * 8, { size: 5 + k * 3, color: `rgba(255,255,255,${1 - k})`, outline: `rgba(42,30,46,${1 - k})`, weight: 700 });
+    }
+    if (hover?.kind === 'agent' && hover.id === a.id) {
+      const y = top - (rt.bubble ? 16 : 6) + Math.round(Math.sin(t * 6));
+      rect(ctx, rt.x - 3, y, 7, 1, '#2a1e2e');
+      rect(ctx, rt.x - 2, y + 1, 5, 1, '#ffe066');
+      rect(ctx, rt.x - 1, y + 2, 3, 1, '#ffe066');
+      rect(ctx, rt.x, y + 3, 1, 1, '#ffe066');
+    }
+  }
+
+  for (const p of engine.particles) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, p.life / p.max));
+    rect(ctx, p.x, p.y, 1, 1, p.color);
+  }
+  ctx.globalAlpha = 1;
+  for (const f of engine.flyers) {
+    const pos = engine.flyerPos(f);
+    drawPaper(ctx, pos.x, pos.y);
+  }
+}
+
+function drawAgent(ctx: CanvasRenderingContext2D, look: Parameters<typeof getSprite>[0], rt: AgentRT, t: number): void {
+  const step = Math.floor(rt.walkT * 8) % 2;
+  const legs = rt.moving ? (step ? 'walk1' : 'walk2') : 'stand';
+  const arms = rt.status === 'working' ? (Math.floor(rt.typeT * 7) % 2 ? 'typeL' : 'typeR') : 'rest';
+  const spr = getSprite(look, { view: rt.facing, legs, arms, blink: rt.blinking });
+  const bob = rt.moving ? -step : rt.status === 'idle' ? (Math.floor(t * 1.1) % 2) : 0;
+  if (rt.status === 'walking' || rt.status === 'reading') rect(ctx, rt.x - 5, rt.y - 1, 10, 2, 'rgba(40,20,10,0.25)');
+  ctx.drawImage(spr, Math.round(rt.x - 8), Math.round(rt.y - 26 + bob));
+}
+
+export function hitTest(p: Pt, s: State): HoverTarget | null {
+  const rts = [...engine.agents.values()].sort((a, b) => b.y - a.y);
+  for (const rt of rts) {
+    if (Math.abs(p.x - rt.x) <= 7 && p.y >= rt.y - 26 && p.y <= rt.y) return { kind: 'agent', id: rt.id };
+  }
+  if (inRect(p, { x: BOARD.x, y: BOARD.y - 6, w: BOARD.w, h: BOARD.h + 6 }) || inRect(p, NOTES_AREA)) return { kind: 'board' };
+  for (const d of DESKS) {
+    if (p.x >= d.x - 26 && p.x <= d.x + 26 && p.y >= d.y - 42 && p.y <= d.y + 2) {
+      const a = s.agents.find((x) => x.desk === d.index);
+      return a ? { kind: 'agent', id: a.id } : { kind: 'desk', index: d.index };
+    }
+  }
+  return null;
+}
