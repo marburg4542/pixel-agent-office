@@ -40,7 +40,7 @@ export function renderScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElement
     cards: s.tasks
       .filter((x) => x.column === id)
       .sort((a, b) => PRIO[a.priority] - PRIO[b.priority])
-      .map((x) => ({ priority: x.priority, active: x.active })),
+      .map((x) => ({ priority: x.priority, active: x.active, blocked: !!x.blocked })),
   }));
   drawBoard(ctx, columns, translate(s.settings.lang, 'board'), hover?.kind === 'board', t);
   drawWallNotes(ctx, s.notes.map((n) => ({ color: NOTE_COLORS[n.color] ?? NOTE_COLORS[0], unread: noteUnread(n, s) })), t);

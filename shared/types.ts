@@ -125,6 +125,8 @@ export interface Task {
   createdAt: number;
   updatedAt: number;
   doneAt?: number;
+  /** A real AI call failed (bad key, rate limit…). Agents skip the task until `until` or a manual retry. */
+  blocked?: { reason: string; kind: string; at: number; until?: number };
 }
 
 export interface Note {
@@ -155,6 +157,20 @@ export interface UserSettings {
   volume: number;
   simSpeed: number;
   paused: boolean;
+  /** 'auto' = call the real model whenever the agent's provider has a key; 'sim' = always simulate. */
+  aiMode: 'auto' | 'sim';
+  /** Monthly spending cap in USD for real AI calls (0 = no cap). Over the cap, agents fall back to simulation. */
+  budgetUsd: number;
+}
+
+/** Real-AI spending for the current month. */
+export interface UsageSummary {
+  month: string;
+  costUsd: number;
+  tokensIn: number;
+  tokensOut: number;
+  calls: number;
+  byModel: { modelId: string; modelName: string; costUsd: number; calls: number; tokensIn: number; tokensOut: number }[];
 }
 
 export type UserRole = 'Admin' | 'Member';
@@ -195,7 +211,17 @@ export interface Workspace {
   models: ModelDef[];
   feed: FeedItem[];
   runtime: AgentRuntime[];
+  keys: ApiKeyStatus[];
+  usage: UsageSummary;
+  /** Text streamed so far for steps a real model is answering right now, by task id. */
+  live: Record<string, LiveText>;
   serverTime: number;
+}
+
+export interface LiveText {
+  stage: number;
+  text: string;
+  agentId?: string;
 }
 
 export type ApiKeyProvider =

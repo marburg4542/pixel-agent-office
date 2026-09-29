@@ -90,6 +90,20 @@ db.exec(`
     data TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS feed_user_at ON feed(user_id, at);
+
+  -- Real AI spending per person, month and model (drives the budget cap and the usage view).
+  CREATE TABLE IF NOT EXISTS usage (
+    user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+    month TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    tokens_in INTEGER NOT NULL DEFAULT 0,
+    tokens_out INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    calls INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, month, model_id)
+  );
 `);
 
 export const logAudit = (actor: string | null | undefined, action: string, entityType?: string, entityId?: string | number, details: object = {}) => {

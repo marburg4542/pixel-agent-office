@@ -2,7 +2,8 @@
 // Every change goes through the API; the server's reply (and its event) is the truth.
 import { create } from 'zustand';
 import type {
-  Agent, AgentRuntime, ColumnId, FeedItem, Lang, LogParams, Modal, ModelDef, Note, PublicUser, Task, TeamAgent, UserSettings, Workspace,
+  Agent, AgentRuntime, ApiKeyStatus, ColumnId, FeedItem, Lang, LiveText, LogParams, Modal, ModelDef, Note, PublicUser, Task, TeamAgent, UsageSummary,
+  UserSettings, Workspace,
 } from './types';
 import { DEFAULT_SETTINGS } from '../shared/constants';
 import { translate } from '../shared/i18n';
@@ -23,6 +24,10 @@ interface Data {
   models: ModelDef[];
   feed: FeedItem[];
   runtime: Record<string, AgentRuntime>;
+  keys: ApiKeyStatus[];
+  usage: UsageSummary;
+  /** Text a real model is writing right now, by task id. */
+  live: Record<string, LiveText>;
   /** serverTime − Date.now(), to extrapolate runtime values that carry server timestamps. */
   clockOffset: number;
   loaded: boolean;
@@ -52,6 +57,9 @@ interface Actions {
   restartTask: (id: string) => Promise<void>;
   approveTask: (id: string) => Promise<void>;
   requestChanges: (id: string, agentId: string, text: string) => Promise<void>;
+  retryTask: (id: string) => Promise<void>;
+  setKeys: (keys: ApiKeyStatus[]) => void;
+  refreshUsage: () => Promise<void>;
 
   addNote: (n: NoteInput) => Promise<Note>;
   updateNote: (id: string, patch: NoteInput) => Promise<Note>;
@@ -84,6 +92,9 @@ const empty = (): Data => ({
   models: [],
   feed: [],
   runtime: {},
+  keys: [],
+  usage: { month: '', costUsd: 0, tokensIn: 0, tokensOut: 0, calls: 0, byModel: [] },
+  live: {},
   clockOffset: 0,
   loaded: false,
 });
@@ -158,6 +169,9 @@ export const useStore = create<State>()((set, get) => {
         models: ws.models,
         feed: ws.feed,
         runtime: Object.fromEntries(ws.runtime.map((r) => [r.agentId, r])),
+        keys: ws.keys,
+        usage: ws.usage,
+        live: ws.live ?? {},
         clockOffset: ws.serverTime - Date.now(),
         loaded: true,
       });
@@ -239,6 +253,12 @@ export const useStore = create<State>()((set, get) => {
       const task = await api<Task>(`/tasks/${id}/request-changes`, { method: 'POST', body: { agentId, text } });
       set((s) => ({ tasks: upsert(s.tasks, task) }));
     },
+    retryTask: async (id) => {
+      const task = await api<Task>(`/tasks/${id}/retry`, { method: 'POST' });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+    },
+    setKeys: (keys) => set({ keys }),
+    refreshUsage: async () => set({ usage: await api<UsageSummary>('/usage') }),
 
     addNote: async (n) => {
       const note = await api<Note>('/notes', { method: 'POST', body: n });
@@ -272,8 +292,26 @@ export const useStore = create<State>()((set, get) => {
       // Don't let live updates resurrect something waiting to be deleted.
       if ((name === 'task' || name === 'note') && pendingDeletes.has((data as { id: string }).id)) return;
       switch (name) {
-        case 'task':
-          set({ tasks: upsert(s.tasks, data as Task) });
+        case 'task': {
+          const t = data as Task;
+          const live = s.live[t.id];
+          // The streamed text is replaced by the stored result once the step ends.
+          if (live && (!t.active || t.stage !== live.stage)) {
+            const { [t.id]: _, ...rest } = s.live;
+            set({ tasks: upsert(s.tasks, t), live: rest });
+          } else set({ tasks: upsert(s.tasks, t) });
+          break;
+        }
+        case 'task-stream': {
+          const l = data as LiveText & { id: string };
+          set({ live: { ...s.live, [l.id]: { stage: l.stage, text: l.text, agentId: l.agentId } } });
+          break;
+        }
+        case 'keys-changed':
+          set({ keys: data as ApiKeyStatus[] });
+          break;
+        case 'usage-changed':
+          void get().refreshUsage().catch(() => {});
           break;
         case 'task-deleted':
           set({ tasks: without(s.tasks, (data as { id: string }).id) });

@@ -1,14 +1,33 @@
 // The office "brain": decides what every agent does next, for every user, whether or not anyone
 // has the office open. Browsers only animate what this reports (see AgentRuntime in shared/types).
+//
+// A step runs either for real (the agent's model is called with its owner's API key) or simulated
+// (no key, AI mode "sim", or the monthly budget is used up). Both end in the same hand-off flow.
 import { sendTo } from '../events';
 import * as store from '../workspace/store';
-import { buildStageContext, simulateOutput, stageDuration } from '../sim/stage';
+import { buildPrompt, buildStageContext, expectedChars, maxTokensFor, simulateOutput, stageDuration, WEB_SEARCH_ROLES } from '../sim/stage';
+import { decideAi, runModel } from '../ai';
+import { AiError, type KeyFields } from '../ai/types';
+import { addUsage, costOf } from '../usage';
 import { TRIP_SECONDS } from '../../shared/constants';
-import type { Agent, AgentRuntime, RuntimeStatus, Task } from '../../shared/types';
+import type { Agent, AgentRuntime, LiveText, ModelDef, RuntimeStatus, StageOutput, Task } from '../../shared/types';
 
 const TICK_MS = 200;
 const PHASE_AT = [0, 10, 35, 90];
 const PHASE_KEYS = ['read', 'plan', 'work', 'check'];
+
+/** A real model call in flight. */
+interface Job {
+  controller: AbortController;
+  taskId: string;
+  stage: number;
+  model: ModelDef;
+  text: string;
+  startedAt: number;
+  firstTokenAt?: number;
+  expected: number;
+  lastStream: number;
+}
 
 interface RT {
   agentId: string;
@@ -18,16 +37,19 @@ interface RT {
   tripT: number;
   tripBoardDone: boolean;
   reservedTaskId?: string;
-  /** working: 0–100 and total simulated seconds for this step */
+  /** working: 0–100; simulated steps also have a total duration in simulated seconds */
   progress: number;
   duration: number;
   phase: number;
   noteT: number;
   decideT: number;
   lastSync: number;
+  job?: Job;
 }
 
 const rts = new Map<string, RT>();
+/** Failed automatic retries in a row, per task (for back-off). */
+const autoRetries = new Map<string, number>();
 
 const rtFor = (agentId: string): RT => {
   let rt = rts.get(agentId);
@@ -47,7 +69,8 @@ function runtimeOf(rt: RT, a: Agent): AgentRuntime {
   const speed = speedOf(a);
   const base = { agentId: rt.agentId, status: rt.status, taskId: rt.taskId, at: Date.now() };
   if (rt.status === 'trip') return { ...base, value: rt.tripT / TRIP_SECONDS, rate: speed / TRIP_SECONDS };
-  if (rt.status === 'working') return { ...base, value: rt.progress, rate: (speed / rt.duration) * 100 };
+  // Real calls can't be predicted — the browser just shows the last reported value.
+  if (rt.status === 'working') return { ...base, value: rt.progress, rate: rt.job ? 0 : (speed / rt.duration) * 100 };
   return { ...base, value: 0, rate: 0 };
 }
 
@@ -100,22 +123,44 @@ function atBoard(rt: RT, a: Agent) {
   }
 }
 
+const modelOf = (a: Agent) => store.modelsOf(a.ownerId).find((m) => m.id === a.modelId);
+
 function startWork(rt: RT, a: Agent, t: Task) {
   if (t.column !== 'doing' || t.pipeline[t.stage] !== a.id || t.active) return;
-  const model = store.modelsOf(a.ownerId).find((m) => m.id === a.modelId);
+  if (t.blocked) store.clearBlocked(t.id); // a timed block (rate limit) has expired
+  const model = modelOf(a);
+  const ai = decideAi(a.ownerId, model);
   store.setTaskActive(t.id, true);
-  Object.assign(rt, { status: 'working', taskId: t.id, progress: t.stageProgress, duration: stageDuration(t, model), phase: -1, noteT: 2 });
+  if (ai.real && model) {
+    startReal(rt, a, t, model, ai.key);
+    return;
+  }
+  if (!ai.real && ai.reason === 'budget') store.pushLog(t.id, 'log_budgetSim', { agent: a.name });
+  Object.assign(rt, { status: 'working', taskId: t.id, progress: t.stageProgress, duration: stageDuration(t, model), phase: -1, noteT: 2, job: undefined });
   sync(rt, a);
 }
 
 function toIdle(rt: RT, a: Agent) {
-  Object.assign(rt, { status: 'idle', taskId: undefined, decideT: 0.3 });
+  Object.assign(rt, { status: 'idle', taskId: undefined, decideT: 0.3, job: undefined });
   sync(rt, a);
 }
 
-function work(rt: RT, a: Agent, dt: number) {
+/** Still this agent's step on a task that's in progress? */
+const stillMine = (t: Task | undefined, a: Agent, stage?: number): t is Task =>
+  !!t && t.active && t.column === 'doing' && t.pipeline[t.stage] === a.id && (stage === undefined || t.stage === stage);
+
+function advancePhase(rt: RT, a: Agent, t: Task) {
+  const phase = PHASE_AT.filter((p) => rt.progress >= p).length - 1;
+  if (phase !== rt.phase) {
+    rt.phase = phase;
+    store.pushLog(t.id, `log_phase_${PHASE_KEYS[phase]}`, { agent: a.name });
+  }
+}
+
+/** One simulated step: progress follows the model's speed and the task size. */
+function simWork(rt: RT, a: Agent, dt: number) {
   const t = rt.taskId ? store.getTask(rt.taskId) : undefined;
-  if (!t || !t.active || t.column !== 'doing' || t.pipeline[t.stage] !== a.id) {
+  if (!stillMine(t, a)) {
     // Moved, edited or deleted under us — the store already cleared `active`.
     toIdle(rt, a);
     return;
@@ -124,40 +169,105 @@ function work(rt: RT, a: Agent, dt: number) {
   if (t.stageProgress + 2 < Math.floor(rt.progress)) rt.progress = t.stageProgress;
 
   rt.progress += (dt / rt.duration) * 100;
-  const phase = PHASE_AT.filter((p) => rt.progress >= p).length - 1;
-  if (phase !== rt.phase) {
-    rt.phase = phase;
-    store.pushLog(t.id, `log_phase_${PHASE_KEYS[phase]}`, { agent: a.name });
-  }
+  advancePhase(rt, a, t);
   if ((rt.noteT -= dt) <= 0) {
     rt.noteT = 2;
     readNotes(a);
   }
   if (rt.progress >= 100) {
-    finish(rt, a, t);
+    const ctx = buildStageContext({ notes: store.notesFor(a), models: store.modelsOf(a.ownerId), findAgent: store.getAgent }, t, a);
+    const { text, score } = simulateOutput(ctx, store.langOf(a.ownerId));
+    complete(rt, a, t, {
+      stage: t.stage, agentId: a.id, agentName: a.name, modelId: a.modelId, modelName: ctx.model?.name ?? a.modelId,
+      text, score, at: Date.now(), simulated: true,
+    });
     return;
   }
   store.setTaskProgress(t.id, Math.floor(rt.progress));
 }
 
-function finish(rt: RT, a: Agent, t: Task) {
-  const ctx = buildStageContext(
-    { notes: store.notesFor(a), models: store.modelsOf(a.ownerId), findAgent: store.getAgent },
-    t,
-    a,
+// ─── Real model calls ────────────────────────────────────────────────────────
+
+function startReal(rt: RT, a: Agent, t: Task, model: ModelDef, key: KeyFields) {
+  readNotes(a); // pick up anything new before writing the prompt
+  const ctx = buildStageContext({ notes: store.notesFor(a), models: store.modelsOf(a.ownerId), findAgent: store.getAgent }, t, a);
+  const { system, user } = buildPrompt(ctx, store.langOf(a.ownerId));
+  const job: Job = {
+    controller: new AbortController(), taskId: t.id, stage: t.stage, model, text: '', startedAt: Date.now(), expected: expectedChars(t.size), lastStream: 0,
+  };
+  Object.assign(rt, { status: 'working', taskId: t.id, progress: 1, duration: 1, phase: -1, noteT: 2, job });
+  store.pushLog(t.id, 'log_aiStart', { agent: a.name, model: model.name });
+  sync(rt, a);
+
+  runModel(key, {
+    model, system, user, maxTokens: maxTokensFor(t.size), webSearch: WEB_SEARCH_ROLES.has(a.role), signal: job.controller.signal,
+    onText: (delta) => {
+      job.text += delta;
+      job.firstTokenAt ??= Date.now();
+    },
+  }).then(
+    (res) => {
+      if (rt.job !== job) return; // cancelled or replaced
+      const cur = store.getTask(job.taskId);
+      if (!stillMine(cur, a, job.stage)) {
+        toIdle(rt, a);
+        return;
+      }
+      autoRetries.delete(job.taskId);
+      const cost = costOf(model, res.tokensIn, res.tokensOut);
+      addUsage(a.ownerId, model, res.tokensIn, res.tokensOut, cost);
+      const lang = store.langOf(a.ownerId);
+      const cut = res.truncated ? `\n\n> ⚠️ ${lang === 'th' ? 'คำตอบถูกตัดเพราะยาวเกินขีดจำกัด' : 'The answer was cut off at the length limit.'}` : '';
+      complete(rt, a, cur, {
+        stage: cur.stage, agentId: a.id, agentName: a.name, modelId: model.id, modelName: model.name,
+        text: (res.text.trim() || '…') + cut, score: 0, at: Date.now(), simulated: false,
+        tokensIn: res.tokensIn, tokensOut: res.tokensOut, costUsd: cost,
+      });
+      sendTo([a.ownerId], 'usage-changed', {});
+    },
+    (e: unknown) => {
+      if (rt.job !== job) return;
+      const err = e instanceof AiError ? e : new AiError('other', String(e));
+      if (err.kind === 'aborted') return;
+      // Rate limits and outages retry by themselves, backing off up to 10 minutes; bad keys, empty
+      // credit and refusals wait for you. Only the first failure in a row is announced.
+      const tries = autoRetries.get(job.taskId) ?? 0;
+      let until: number | undefined;
+      if (err.kind === 'rate' || err.kind === 'network') {
+        until = Date.now() + Math.min(600, (err.retryAfterSec ?? 60) * 2 ** tries) * 1000;
+        autoRetries.set(job.taskId, tries + 1);
+      } else autoRetries.delete(job.taskId);
+      store.blockTask(job.taskId, a, err.kind, err.message, until, tries > 0);
+      if (!tries) bubble(a, 'oops');
+      toIdle(rt, a);
+    },
   );
-  const { text, score } = simulateOutput(ctx, store.langOf(a.ownerId));
-  const res = store.completeStage(t.id, {
-    stage: t.stage,
-    agentId: a.id,
-    agentName: a.name,
-    modelId: a.modelId,
-    modelName: ctx.model?.name ?? a.modelId,
-    text,
-    score,
-    at: Date.now(),
-    simulated: true,
-  });
+}
+
+/** Progress for a streaming answer: a slow creep while the model thinks, then text received vs. expected length. */
+function realWork(rt: RT, a: Agent) {
+  const job = rt.job!;
+  const t = store.getTask(job.taskId);
+  if (!stillMine(t, a, job.stage)) {
+    job.controller.abort();
+    toIdle(rt, a);
+    return;
+  }
+  const now = Date.now();
+  const target = job.firstTokenAt ? 10 + Math.min(85, (job.text.length / job.expected) * 85) : Math.min(9, (now - job.startedAt) / 2500);
+  rt.progress = Math.max(rt.progress, target);
+  advancePhase(rt, a, t);
+  store.setTaskProgress(t.id, Math.floor(rt.progress));
+  if (now - job.lastStream > 800 && job.text) {
+    job.lastStream = now;
+    sendTo(store.taskFeedAudience(t), 'task-stream', { id: t.id, stage: job.stage, text: job.text.slice(-6000), agentId: a.id });
+  }
+  if (now - rt.lastSync > 1000) sync(rt, a);
+}
+
+/** Shared ending for simulated and real steps: store the result, celebrate, hand off. */
+function complete(rt: RT, a: Agent, t: Task, output: StageOutput) {
+  const res = store.completeStage(t.id, output);
   bubble(a, 'done');
   sendTo([a.ownerId], 'stage-done', { agentId: a.id });
   const audience = store.taskFeedAudience(t);
@@ -191,7 +301,7 @@ function step(rt: RT, a: Agent, dt: number) {
       }
       break;
     case 'working':
-      work(rt, a, dt);
+      if (!rt.job) simWork(rt, a, dt);
       break;
   }
 }
@@ -206,12 +316,18 @@ export function tick(dtSeconds: number): void {
   for (const a of store.allAgents()) {
     live.add(a.id);
     const rt = rtFor(a.id);
+    // Real calls keep streaming even while the office is paused (they can't be paused).
+    if (rt.job) realWork(rt, a);
     const dt = dtSeconds * speedOf(a);
     if (dt > 0) step(rt, a, dt);
     // Periodic resync keeps browsers' extrapolation honest.
     if (rt.status !== 'idle' && Date.now() - rt.lastSync > 4000) sync(rt, a);
   }
-  for (const id of rts.keys()) if (!live.has(id)) rts.delete(id);
+  for (const [id, rt] of rts) {
+    if (live.has(id)) continue;
+    rt.job?.controller.abort();
+    rts.delete(id);
+  }
 }
 
 export function start(): void {
@@ -228,9 +344,24 @@ export function start(): void {
 
 export function stop(): void {
   if (timer) clearInterval(timer);
+  for (const rt of rts.values()) rt.job?.controller.abort();
 }
 
 /** Current runtime for the given agents (workspace snapshot). */
 export function runtimeFor(agents: Agent[]): AgentRuntime[] {
   return agents.map((a) => runtimeOf(rtFor(a.id), a));
+}
+
+/** Text streamed so far for tasks being answered by real models right now (for late joiners). */
+export function liveTextFor(taskIds: Set<string>): Record<string, LiveText> {
+  const out: Record<string, LiveText> = {};
+  for (const [agentId, rt] of rts) {
+    if (rt.job && taskIds.has(rt.job.taskId)) out[rt.job.taskId] = { stage: rt.job.stage, text: rt.job.text.slice(-6000), agentId };
+  }
+  return out;
+}
+
+/** Someone pressed "retry": start the back-off over. */
+export function resetRetries(taskId: string): void {
+  autoRetries.delete(taskId);
 }

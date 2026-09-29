@@ -181,6 +181,8 @@ export function updateSettings(userId: number, patch: Partial<UserSettings>): Us
   if (typeof patch.volume === 'number') s.volume = Math.max(0, Math.min(1, patch.volume));
   if (typeof patch.simSpeed === 'number' && SIM_SPEEDS.includes(patch.simSpeed)) s.simSpeed = patch.simSpeed;
   if (typeof patch.paused === 'boolean') s.paused = patch.paused;
+  if (patch.aiMode === 'auto' || patch.aiMode === 'sim') s.aiMode = patch.aiMode;
+  if (typeof patch.budgetUsd === 'number' && Number.isFinite(patch.budgetUsd)) s.budgetUsd = Math.max(0, Math.min(100000, patch.budgetUsd));
   saveSettings(userId);
   sendTo([userId], 'settings', publicSettings(userId));
   hooks.settingsChanged?.(userId);
@@ -457,6 +459,7 @@ export function updateTask(u: AuthUser, id: string, input: TaskInput): Task {
     if (next.pipeline[next.stage] !== t.pipeline[t.stage]) {
       next.active = false;
       next.stageProgress = 0;
+      next.blocked = undefined;
     }
     // Steps added to a finished pipeline that's waiting for review: send it back to work.
     if (t.column === 'review' && next.stage < next.pipeline.length) {
@@ -480,7 +483,7 @@ export function moveTask(u: AuthUser, id: string, column: ColumnId): Task {
   const t = visibleTask(u, id);
   if (!['backlog', 'todo', 'doing', 'review', 'done'].includes(column)) throw new ApiError(400, 'คอลัมน์ไม่ถูกต้อง', 'Invalid column');
   if (t.column === column) return t;
-  let next: Task = { ...t, column, active: false };
+  let next: Task = { ...t, column, active: false, blocked: undefined };
   if ((column === 'todo' || column === 'doing') && t.stage >= t.pipeline.length) {
     next = withLog({ ...next, stage: 0, stageProgress: 0 }, 'log_restarted');
   }
@@ -491,7 +494,7 @@ export function moveTask(u: AuthUser, id: string, column: ColumnId): Task {
 
 export function restartTask(u: AuthUser, id: string): Task {
   const t = visibleTask(u, id);
-  return commitTask(withLog({ ...t, stage: 0, stageProgress: 0, active: false, column: 'todo', doneAt: undefined }, 'log_restarted'));
+  return commitTask(withLog({ ...t, stage: 0, stageProgress: 0, active: false, column: 'todo', doneAt: undefined, blocked: undefined }, 'log_restarted'));
 }
 
 export function approveTask(u: AuthUser, id: string): Task {
@@ -512,7 +515,7 @@ export function requestChanges(u: AuthUser, id: string, agentId: string, text: s
   });
   const agent = agents.get(agentId);
   const next = commitTask(
-    withLog({ ...t, stage, stageProgress: 0, active: false, column: 'todo', doneAt: undefined }, 'log_changes', { agent: agent?.name ?? '?', text: body }),
+    withLog({ ...t, stage, stageProgress: 0, active: false, column: 'todo', doneAt: undefined, blocked: undefined }, 'log_changes', { agent: agent?.name ?? '?', text: body }),
   );
   pushFeed(taskFeedAudience(t), 'feed_changes', { task: t.title });
   return next;
@@ -522,16 +525,38 @@ export function requestChanges(u: AuthUser, id: string, agentId: string, text: s
 
 const PRIORITY_RANK = { high: 0, med: 1, low: 2 } as const;
 
-/** Tasks waiting on this agent, best first. */
+const isBlocked = (t: Task, now = Date.now()) => !!t.blocked && !(t.blocked.until && t.blocked.until <= now);
+
+/** Tasks waiting on this agent, best first (blocked ones wait until they may be retried). */
 export function queueFor(agentId: string): Task[] {
+  const now = Date.now();
   return [...tasks.values()]
-    .filter((t) => (t.column === 'todo' || t.column === 'doing') && t.pipeline[t.stage] === agentId && !t.active)
+    .filter((t) => (t.column === 'todo' || t.column === 'doing') && t.pipeline[t.stage] === agentId && !t.active && !isBlocked(t, now))
     .sort(
       (a, b) =>
         (a.column === 'doing' ? 0 : 1) - (b.column === 'doing' ? 0 : 1) ||
         PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] ||
         a.createdAt - b.createdAt,
     );
+}
+
+/** A real AI call failed: park the task (optionally until a time) and say why. `quiet` = a repeat failure, no feed item. */
+export function blockTask(taskId: string, agent: Agent, kind: string, reason: string, until?: number, quiet = false): void {
+  const t = tasks.get(taskId);
+  if (!t) return;
+  commitTask(withLog({ ...t, active: false, blocked: { kind, reason, at: Date.now(), until } }, 'log_aiError', { agent: agent.name, error: reason }));
+  if (!quiet) pushFeed([agent.ownerId], 'feed_aiError', { agent: agent.name, task: t.title });
+}
+
+/** A timed block ran out and an agent is picking the task up again. */
+export function clearBlocked(taskId: string): void {
+  const t = tasks.get(taskId);
+  if (t?.blocked) commitTask({ ...t, blocked: undefined });
+}
+
+export function retryTask(u: AuthUser, id: string): Task {
+  const t = visibleTask(u, id);
+  return commitTask(withLog({ ...t, blocked: undefined }, 'log_retry'));
 }
 
 export function claimTask(taskId: string, agent: Agent): void {

@@ -214,12 +214,16 @@ function TaskCard(props: {
     warn = true;
   } else if (task.column === 'done') status = `✅ ${t('col_done')}`;
   else if (task.column === 'review') status = `🔍 ${t('colHint_review')}`;
+  else if (task.blocked && (task.column === 'todo' || task.column === 'doing')) {
+    status = `⛔ ${t('blocked_short')}: ${t(`blocked_${['auth', 'quota', 'rate', 'network', 'refusal', 'model'].includes(task.blocked.kind) ? task.blocked.kind : 'other'}`)}`;
+    warn = true;
+  }
   else if (current && task.active) status = `⚙ ${t('workingOn', { name: current.name, p: Math.floor(task.stageProgress) })}`;
   else if (current && (task.column === 'todo' || task.column === 'doing')) status = `⏳ ${t('queuedFor', { name: current.name })}`;
 
   return (
     <div
-      className={`card ${props.dragging ? 'dragging' : ''} ${task.active ? 'active' : ''} ${task.scope === 'shared' ? 'shared' : ''}`}
+      className={`card ${props.dragging ? 'dragging' : ''} ${task.active ? 'active' : ''} ${task.scope === 'shared' ? 'shared' : ''} ${task.blocked ? 'blocked' : ''}`}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData('text/plain', task.id);

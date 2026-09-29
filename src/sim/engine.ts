@@ -88,6 +88,7 @@ class Engine {
       const { agentId, key } = d as { agentId: string; key: string };
       this.say(agentId, translate(useStore.getState().settings.lang, `bubble_${key}`));
       if (key === 'gotIt') play('note');
+      if (key === 'oops') play('error');
     });
     onServerEvent('stage-done', (d) => {
       const va = this.agents.get((d as { agentId: string }).agentId);

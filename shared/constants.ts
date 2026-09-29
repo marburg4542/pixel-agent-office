@@ -12,6 +12,8 @@ export const DEFAULT_SETTINGS: UserSettings = {
   volume: 0.6,
   simSpeed: 1,
   paused: false,
+  aiMode: 'auto',
+  budgetUsd: 0,
 };
 
 export const SIM_SPEEDS = [1, 2, 4, 8];

@@ -4,8 +4,12 @@ import { msg } from '../lang';
 import { getUserById, toPublicUser } from '../users';
 import * as store from '../workspace/store';
 import * as worker from '../worker/engine';
-import { deleteKey, listKeys, setKey } from '../keys';
-import type { Workspace } from '../../shared/types';
+import { deleteKey, getKey, listKeys, setKey } from '../keys';
+import { testAiKey } from '../ai';
+import { usageSummary } from '../usage';
+import { sendTo } from '../events';
+import { keyProvider } from '../../shared/keys';
+import type { ProviderId, Workspace } from '../../shared/types';
 
 const router = Router();
 router.use(verifyAuth);
@@ -30,7 +34,14 @@ router.get(
     store.ensureSeeded(user.id);
     const ws = store.workspaceFor(toPublicUser(user));
     const visibleAgents = [...ws.agents, ...ws.teamAgents.map((a) => store.getAgent(a.id)!).filter(Boolean)];
-    const result: Workspace = { ...ws, runtime: worker.runtimeFor(visibleAgents), serverTime: Date.now() };
+    const result: Workspace = {
+      ...ws,
+      runtime: worker.runtimeFor(visibleAgents),
+      keys: listKeys(user.id),
+      usage: usageSummary(user.id),
+      live: worker.liveTextFor(new Set(ws.tasks.map((t) => t.id))),
+      serverTime: Date.now(),
+    };
     return result;
   }),
 );
@@ -52,6 +63,13 @@ router.delete('/tasks/:id', h((req) => (store.deleteTask(req.user!, String(req.p
 router.post('/tasks/:id/move', h((req) => store.moveTask(req.user!, String(req.params.id), req.body?.column)));
 router.post('/tasks/:id/restart', h((req) => store.restartTask(req.user!, String(req.params.id))));
 router.post('/tasks/:id/approve', h((req) => store.approveTask(req.user!, String(req.params.id))));
+router.post(
+  '/tasks/:id/retry',
+  h((req) => {
+    worker.resetRetries(String(req.params.id));
+    return store.retryTask(req.user!, String(req.params.id));
+  }),
+);
 router.post('/tasks/:id/request-changes', h((req) => store.requestChanges(req.user!, String(req.params.id), String(req.body?.agentId), req.body?.text)));
 
 // Notes
@@ -68,9 +86,48 @@ router.post('/models/reset', h((req) => store.resetModels(req.user!.id)));
 // Settings
 router.put('/settings', h((req) => store.updateSettings(req.user!.id, req.body ?? {})));
 
-// API keys — only hints ever come back.
+// Spending on real AI calls this month
+router.get('/usage', h((req) => usageSummary(req.user!.id)));
+
+// API keys — only hints ever come back. Other tabs of the same person refresh their list.
+const keysChanged = (userId: number) => sendTo([userId], 'keys-changed', listKeys(userId));
 router.get('/keys', h((req) => listKeys(req.user!.id)));
-router.put('/keys/:provider', h((req) => setKey(req.user!.id, String(req.params.provider), req.body)));
-router.delete('/keys/:provider', h((req) => (deleteKey(req.user!.id, String(req.params.provider)), true)));
+router.put(
+  '/keys/:provider',
+  h((req) => {
+    const out = setKey(req.user!.id, String(req.params.provider), req.body);
+    keysChanged(req.user!.id);
+    return out;
+  }),
+);
+router.delete(
+  '/keys/:provider',
+  h((req) => {
+    deleteKey(req.user!.id, String(req.params.provider));
+    keysChanged(req.user!.id);
+    return true;
+  }),
+);
+
+/** Try the saved key with a cheap call. */
+router.post('/keys/:provider/test', async (req, res, next) => {
+  try {
+    const provider = String(req.params.provider);
+    const def = keyProvider(provider);
+    if (!def || def.group !== 'ai') {
+      res.status(400).json({ success: false, message: msg(req, 'ยังทดสอบคีย์ประเภทนี้ไม่ได้', "This kind of key can't be tested yet") });
+      return;
+    }
+    const key = getKey(req.user!.id, def.id);
+    if (!key) {
+      res.status(404).json({ success: false, message: msg(req, 'ยังไม่ได้ใส่คีย์นี้', 'No key saved for this provider') });
+      return;
+    }
+    const error = await testAiKey(def.id as ProviderId, key);
+    res.json({ success: true, data: { ok: !error, error } });
+  } catch (e) {
+    next(e);
+  }
+});
 
 export default router;

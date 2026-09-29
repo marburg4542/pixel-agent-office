@@ -21,6 +21,26 @@ function usePendingCount(isAdmin: boolean): number {
   return count;
 }
 
+type AiState = { kind: 'real' | 'sim' | 'mixed'; hint: string; tab: 'ai' | 'keys' };
+
+/** Will my agents call real models? (AI on, a key for each agent's provider, budget left.) */
+function useAiState(): AiState {
+  const t = useT();
+  const aiMode = useStore((s) => s.settings.aiMode);
+  const budget = useStore((s) => s.settings.budgetUsd);
+  const spent = useStore((s) => s.usage.costUsd);
+  const keys = useStore((s) => s.keys);
+  const agents = useStore((s) => s.agents);
+  const models = useStore((s) => s.models);
+  if (aiMode === 'sim') return { kind: 'sim', hint: t('aiHint_off'), tab: 'ai' };
+  if (budget > 0 && spent >= budget) return { kind: 'sim', hint: t('aiHint_budget'), tab: 'ai' };
+  const hasKey = (provider?: string) => keys.some((k) => k.provider === provider && k.configured);
+  const simAgents = agents.filter((a) => !hasKey(models.find((m) => m.id === a.modelId)?.provider));
+  if (!simAgents.length) return { kind: 'real', hint: t('aiHint_real'), tab: 'ai' };
+  if (simAgents.length === agents.length) return { kind: 'sim', hint: t('aiHint_noKeys'), tab: 'keys' };
+  return { kind: 'mixed', hint: t('aiHint_mixed', { names: simAgents.map((a) => a.name).join(', ') }), tab: 'keys' };
+}
+
 export function TopBar({ onSignOut }: { onSignOut: () => void }) {
   const t = useT();
   const user = useStore((s) => s.user);
@@ -34,6 +54,7 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
   const { setLang, togglePause, setSpeed, openModal } = useStore.getState();
   const isAdmin = user?.role === 'Admin';
   const pending = usePendingCount(isAdmin);
+  const ai = useAiState();
   const ref = useRef<HTMLElement>(null);
 
   // Drawers sit just under the bar, which wraps to two rows on narrow screens.
@@ -59,7 +80,9 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
         </svg>
         {t('appTitle')}
       </div>
-      <span className="sim-badge" title={t('simHint')}>{t('simBadge')}</span>
+      <button className={`ai-badge ai-${ai.kind}`} title={ai.hint} aria-label={`${t(`aiBadge_${ai.kind}`)} — ${ai.hint}`} onClick={() => openModal({ kind: 'settings', tab: ai.tab })}>
+        {ai.kind === 'real' ? '⚡' : ai.kind === 'mixed' ? '◐' : '🎲'} {t(`aiBadge_${ai.kind}`)}
+      </button>
 
       <div className="tb-group">
         <button className={`btn dark sm ${paused ? 'on' : ''}`} onClick={togglePause} title={paused ? t('play') : t('pause')}>

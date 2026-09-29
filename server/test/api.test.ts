@@ -226,6 +226,88 @@ test('API keys are stored encrypted and only a hint comes back', async () => {
   assert.equal(missing.status, 400, 'all fields required');
 });
 
+test('real AI steps stream into the task, record usage, and block on errors', async () => {
+  const ai = await import('../ai');
+  const { AiError } = await import('../ai/types');
+  const original = { ...ai.ADAPTERS };
+  let mode: 'ok' | 'auth' | 'rate' = 'ok';
+  const prompts: string[] = [];
+  const fake = {
+    async run(_key: Record<string, string>, req: import('../ai/types').RunRequest) {
+      prompts.push(`${req.system}\n${req.user}`);
+      if (mode === 'auth') throw new AiError('auth', 'invalid x-api-key');
+      if (mode === 'rate') throw new AiError('rate', 'slow down', 1);
+      req.onText('# Real ');
+      await new Promise((r) => setTimeout(r, 5));
+      req.onText('answer');
+      return { text: '# Real answer', tokensIn: 1000, tokensOut: 500, truncated: false };
+    },
+    async test() {},
+  };
+  for (const id of Object.keys(ai.ADAPTERS) as (keyof typeof ai.ADAPTERS)[]) ai.ADAPTERS[id] = fake;
+  try {
+    for (const [provider, body] of Object.entries({ anthropic: { key: 'sk-ant-x' }, openai: { key: 'sk-x' }, google: { key: 'AIza-x' }, openrouter: { key: 'sk-or-x' }, ollama: { baseUrl: 'http://localhost:11434' } })) {
+      await call(`/keys/${provider}`, { method: 'PUT', token: adminToken, body });
+    }
+    const tested = await call('/keys/anthropic/test', { method: 'POST', token: adminToken });
+    assert.equal(tested.data.ok, true);
+
+    const ws = (await call('/workspace', { token: adminToken })).data;
+    const agent = ws.agents[0];
+    const waitFor = async (id: string, done: (t: any) => boolean) => {
+      for (let i = 0; i < 300; i++) {
+        const t = (await call('/workspace', { token: adminToken })).data.tasks.find((x: { id: string }) => x.id === id);
+        if (done(t)) return t;
+        worker.tick(1);
+        await new Promise((r) => setTimeout(r, 2));
+      }
+      assert.fail('task never got there');
+    };
+    const created = await call('/tasks', { method: 'POST', token: adminToken, body: { title: 'Real one', pipeline: [agent.id], size: 'S', priority: 'high' } });
+    const id = created.data.id;
+    const t = await waitFor(id, (x) => x.column === 'review');
+    assert.equal(t.outputs[0].simulated, false);
+    assert.equal(t.outputs[0].tokensIn, 1000);
+    assert.match(t.outputs[0].text, /Real answer/);
+    assert.ok(prompts.some((p) => p.includes('Real one')), 'the task title is in the prompt');
+    const usage = (await call('/usage', { token: adminToken })).data;
+    assert.ok(usage.calls >= 1);
+
+    // A rejected key parks the task until someone retries.
+    mode = 'auth';
+    const bad = await call('/tasks', { method: 'POST', token: adminToken, body: { title: 'Bad key', pipeline: [agent.id], size: 'S', priority: 'high' } });
+    const blocked = await waitFor(bad.data.id, (x) => !!x.blocked);
+    assert.equal(blocked.blocked.kind, 'auth');
+    assert.equal(blocked.blocked.until, undefined);
+    assert.equal(blocked.active, false);
+    mode = 'ok';
+    for (let i = 0; i < 30; i++) worker.tick(1);
+    const still = (await call('/workspace', { token: adminToken })).data.tasks.find((x: { id: string }) => x.id === bad.data.id);
+    assert.ok(still.blocked, 'stays blocked without a retry');
+    const retried = await call(`/tasks/${bad.data.id}/retry`, { method: 'POST', token: adminToken });
+    assert.equal(retried.data.blocked, undefined);
+    await waitFor(bad.data.id, (x) => x.column === 'review');
+
+    // Rate limits come with a time, and the task is picked up again after it.
+    mode = 'rate';
+    const slow = await call('/tasks', { method: 'POST', token: adminToken, body: { title: 'Slow', pipeline: [agent.id], size: 'S', priority: 'high' } });
+    const limited = await waitFor(slow.data.id, (x) => !!x.blocked);
+    assert.equal(limited.blocked.kind, 'rate');
+    assert.ok(limited.blocked.until > Date.now() - 1000);
+    mode = 'ok';
+    await new Promise((r) => setTimeout(r, 1100));
+    await waitFor(slow.data.id, (x) => x.column === 'review');
+
+    // AI mode off: simulated even with keys.
+    await call('/settings', { method: 'PUT', token: adminToken, body: { aiMode: 'sim' } });
+    const sim = await call('/tasks', { method: 'POST', token: adminToken, body: { title: 'Sim', pipeline: [agent.id], size: 'S', priority: 'high' } });
+    const simDone = await waitFor(sim.data.id, (x) => x.column === 'review');
+    assert.equal(simDone.outputs[0].simulated, true);
+  } finally {
+    Object.assign(ai.ADAPTERS, original);
+  }
+});
+
 test('changing email needs the current password', async () => {
   const noPw = await call('/update-profile', { method: 'PUT', token: bobToken, body: { email: 'bob2@test.local' } });
   assert.equal(noPw.status, 400);

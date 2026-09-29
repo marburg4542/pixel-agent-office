@@ -216,6 +216,7 @@ export const PRIORITY_COLORS = { low: '#7fbf7f', med: '#f2c94c', high: '#e0524a'
 export interface BoardCard {
   priority: keyof typeof PRIORITY_COLORS;
   active: boolean;
+  blocked: boolean;
 }
 
 export function drawBoard(
@@ -236,6 +237,7 @@ export function drawBoard(
       rect(ctx, x, y, 2, 5, PRIORITY_COLORS[card.priority]);
       rect(ctx, x + 4, y + 2, 10, 1, '#c9bfa8');
       if (card.active && Math.floor(t * 3) % 2 === 0) rect(ctx, x + colW - 5, y + 1, 2, 2, '#f0a030');
+      if (card.blocked) rect(ctx, x + colW - 5, y + 1, 2, 3, '#d8453e');
     });
     if (col.cards.length > max) text(ctx, `+${col.cards.length - max}`, x + colW / 2, b.y + b.h - 4, { size: 4, color: '#5a3a24' });
   });

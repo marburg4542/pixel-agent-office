@@ -15,4 +15,4 @@ export type Modal =
   | { kind: 'help'; step?: number }
   | { kind: 'confirm'; message: string; onYes: () => void; danger?: boolean };
 
-export type SettingsTab = 'profile' | 'sound' | 'keys' | 'data';
+export type SettingsTab = 'profile' | 'sound' | 'ai' | 'keys' | 'data';

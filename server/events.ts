@@ -6,6 +6,14 @@ import { checkToken } from './middleware/auth';
 const clients = new Map<number, Set<Response>>();
 const router = Router();
 
+const write = (res: Response, payload: string) => {
+  try {
+    res.write(payload);
+  } catch {
+    /* connection already gone; the close handler cleans up */
+  }
+};
+
 // EventSource can't set headers, so the token comes in the query string.
 router.get('/events', (req, res) => {
   const result = checkToken(String(req.query.token || ''));
@@ -26,7 +34,9 @@ router.get('/events', (req, res) => {
   let set = clients.get(userId);
   if (!set) clients.set(userId, (set = new Set()));
   set.add(res);
-  const heartbeat = setInterval(() => res.write(': ping\n\n'), 25000);
+  // A real event (not a comment) so browsers can notice a stream that silently stopped — e.g. a
+  // proxy that kept the connection open after the server restarted.
+  const heartbeat = setInterval(() => write(res, 'event: ping\ndata: {}\n\n'), 10000);
 
   req.on('close', () => {
     clearInterval(heartbeat);
@@ -34,14 +44,6 @@ router.get('/events', (req, res) => {
     if (!set.size) clients.delete(userId);
   });
 });
-
-const write = (res: Response, payload: string) => {
-  try {
-    res.write(payload);
-  } catch {
-    /* connection already gone; the close handler cleans up */
-  }
-};
 
 export const sendTo = (userIds: Iterable<number>, event: string, data: unknown = {}): void => {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
