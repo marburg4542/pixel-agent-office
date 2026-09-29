@@ -1,4 +1,4 @@
-import type { ModelDef, RoleId } from '../types';
+import type { ModelDef, RoleId } from './types';
 
 export interface RoleDef {
   id: RoleId;
@@ -11,6 +11,7 @@ export interface RoleDef {
 export const ROLES: RoleDef[] = [
   { id: 'planner', icon: '🧭', color: '#9a6bd8', weights: { quality: 0.7, speed: 0.2, cost: 0.1 } },
   { id: 'researcher', icon: '🔎', color: '#3fa7c4', weights: { quality: 0.5, speed: 0.3, cost: 0.2 } },
+  { id: 'analyst', icon: '📈', color: '#d0584a', weights: { quality: 0.6, speed: 0.2, cost: 0.2 } },
   { id: 'coder', icon: '💻', color: '#4f7cf0', weights: { quality: 0.6, speed: 0.3, cost: 0.1 } },
   { id: 'writer', icon: '✍️', color: '#e08a3c', weights: { quality: 0.5, speed: 0.3, cost: 0.2 } },
   { id: 'designer', icon: '🎨', color: '#e05a8a', weights: { quality: 0.5, speed: 0.3, cost: 0.2 } },

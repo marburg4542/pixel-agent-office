@@ -14,7 +14,8 @@ export const CLOCK = { x: 112, y: 24 };
 export const AISLE_TOP = 84;
 export const AISLE_MID = 146;
 export const BOARD_FRONT_Y = 79;
-export const BOARD_SLOTS = [160, 180, 200, 220, 240];
+/** Where agents stand while reading the board (8 = one per desk). */
+export const BOARD_SLOTS = [150, 164, 178, 192, 206, 220, 234, 248];
 /** Vertical corridors between desk columns. */
 const CORRIDORS = [106, 200, 294];
 

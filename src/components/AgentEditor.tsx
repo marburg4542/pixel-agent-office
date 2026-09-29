@@ -3,9 +3,10 @@ import type { Look, ModelDef, RoleId } from '../types';
 import { useStore, useT, MAX_DESKS } from '../store';
 import { ACCESSORIES, EYES, HAIR, TOPS, randomLook } from '../sprites/character';
 import { CLOTH_COLORS, HAIR_COLORS, PANTS_COLORS, SKIN_TONES } from '../sprites/color';
-import { PROVIDER_ORDER, PROVIDERS } from '../data/models';
-import { ROLES, recommendedModels } from '../data/roles';
+import { PROVIDER_ORDER, PROVIDERS } from '../../shared/models';
+import { ROLES, recommendedModels } from '../../shared/roles';
 import { pick } from '../util';
+import { play } from '../lib/sound';
 import { Pips, ProviderDot, Window } from './ui';
 import { SpritePreview, type PreviewAnim } from './SpritePreview';
 
@@ -13,7 +14,7 @@ const NAMES = ['Ada', 'Bit', 'Cleo', 'Dex', 'Echo', 'Finn', 'Gigi', 'Hex', 'Ivy'
 
 export function AgentEditor({ z, onClose, agentId, desk }: { z: number; onClose: () => void; agentId?: string; desk?: number }) {
   const t = useT();
-  const lang = useStore((s) => s.lang);
+  const lang = useStore((s) => s.settings.lang);
   const agents = useStore((s) => s.agents);
   const models = useStore((s) => s.models);
   const existing = agents.find((a) => a.id === agentId);
@@ -41,16 +42,27 @@ export function AgentEditor({ z, onClose, agentId, desk }: { z: number; onClose:
   const rec = useMemo(() => recommendedModels(models, role), [models, role]);
   const set = <K extends keyof Look>(k: K, v: Look[K]) => setLook((l) => ({ ...l, [k]: v }));
 
-  const save = () => {
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
     if (!name.trim()) {
       setError(t('nameRequired'));
       setTab('job');
       return;
     }
     const data = { name: name.trim(), role, roleLabel: role === 'custom' ? roleLabel.trim() : undefined, modelId, instructions, look, desk: deskIdx };
-    if (existing) updateAgent(existing.id, data);
-    else addAgent(data);
-    onClose();
+    setBusy(true);
+    try {
+      if (existing) await updateAgent(existing.id, data);
+      else {
+        await addAgent(data);
+        play('hire');
+      }
+      onClose();
+    } catch {
+      /* shown by api() */
+    } finally {
+      setBusy(false);
+    }
   };
 
   const L = (x: { th: string; en: string }) => x[lang];
@@ -65,7 +77,7 @@ export function AgentEditor({ z, onClose, agentId, desk }: { z: number; onClose:
         <>
           {error && <span className="error">{error}</span>}
           <button className="btn" onClick={onClose}>{t('cancel')}</button>
-          <button className="btn primary" onClick={save}>{existing ? `💾 ${t('save')}` : `🤝 ${t('hire')}`}</button>
+          <button className="btn primary" disabled={busy} onClick={() => void save()}>{existing ? `💾 ${t('save')}` : `🤝 ${t('hire')}`}</button>
         </>
       }
     >

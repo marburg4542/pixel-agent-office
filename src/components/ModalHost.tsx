@@ -8,6 +8,8 @@ import { ModelLibrary } from './ModelLibrary';
 import { NoteEditor } from './NoteEditor';
 import { TaskDetail } from './TaskDetail';
 import { TaskEditor } from './TaskEditor';
+import { SettingsWindow } from './SettingsWindow';
+import { UsersWindow } from './UsersWindow';
 import { Window } from './ui';
 
 export function ModalHost() {
@@ -49,6 +51,10 @@ function ModalView({ modal, z }: { modal: Modal; z: number }) {
       return <AgentDetail z={z} onClose={onClose} agentId={modal.agentId} />;
     case 'models':
       return <ModelLibrary z={z} onClose={onClose} />;
+    case 'settings':
+      return <SettingsWindow z={z} onClose={onClose} tab={modal.tab} />;
+    case 'users':
+      return <UsersWindow z={z} onClose={onClose} />;
     case 'confirm':
       return <Confirm z={z} modal={modal} onClose={onClose} />;
   }

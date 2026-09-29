@@ -1,7 +1,7 @@
-import type { Agent, Lang, ModelDef, Note, StageOutput, Task } from '../types';
-import { roleById } from '../data/roles';
-import { translate } from '../i18n';
-import { clamp, pick, randInt } from '../util';
+import type { Agent, Lang, ModelDef, Note, StageOutput, Task } from '../../shared/types';
+import { roleById } from '../../shared/roles';
+import { translate } from '../../shared/i18n';
+import { clamp, pick, randInt } from '../../shared/util';
 
 /**
  * Everything an agent "knows" when it works one step of a task.
@@ -19,8 +19,14 @@ export interface StageContext {
   nextAgent?: Agent;
 }
 
+/**
+ * @param s.notes notes addressed to this agent (already scoped per owner); only read ones that
+ *                apply to this task are used
+ * @param s.models the agent owner's model library
+ * @param s.findAgent looks up any agent (the next step may belong to another user on shared tasks)
+ */
 export function buildStageContext(
-  s: { agents: Agent[]; notes: Note[]; models: ModelDef[] },
+  s: { notes: Note[]; models: ModelDef[]; findAgent: (id: string) => Agent | undefined },
   task: Task,
   agent: Agent,
 ): StageContext {
@@ -29,9 +35,7 @@ export function buildStageContext(
     const out = [...task.outputs].reverse().find((o) => o.stage === i);
     if (out) previous.push(out);
   }
-  const notes = s.notes.filter(
-    (n) => (n.to === agent.id || n.to === 'all') && (!n.taskId || n.taskId === task.id) && n.readBy.includes(agent.id),
-  );
+  const notes = s.notes.filter((n) => (!n.taskId || n.taskId === task.id) && n.readBy.includes(agent.id));
   return {
     task,
     agent,
@@ -39,7 +43,7 @@ export function buildStageContext(
     stage: task.stage,
     previous,
     notes,
-    nextAgent: s.agents.find((a) => a.id === task.pipeline[task.stage + 1]),
+    nextAgent: s.findAgent(task.pipeline[task.stage + 1]),
   };
 }
 
@@ -117,6 +121,14 @@ export function simulateOutput(ctx: StageContext, lang: Lang): { text: string; s
       lines.push(th ? `สรุปผลค้นคว้า: ${task.title}` : `Research summary: ${task.title}`);
       sample(P.research, 3).forEach((s) => lines.push(`• ${s}`));
       break;
+    case 'analyst': {
+      const pos = 30 + randInt(40);
+      const neg = 5 + randInt(Math.max(1, 90 - pos - 5));
+      lines.push(th ? `สรุปความเห็นและข่าว: ${task.title}` : `Sentiment & news brief: ${task.title}`);
+      lines.push(th ? `ภาพรวมความรู้สึก: บวก ${pos}% · กลาง ${100 - pos - neg}% · ลบ ${neg}%` : `Overall sentiment: ${pos}% positive · ${100 - pos - neg}% neutral · ${neg}% negative`);
+      sample(P.research, 2).forEach((s) => lines.push(`• ${s}`));
+      break;
+    }
     case 'coder': {
       const fn = fnName(task.title);
       const n = 3 + randInt(4);

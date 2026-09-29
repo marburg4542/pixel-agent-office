@@ -1,34 +1,56 @@
 import { useState } from 'react';
-import type { Agent, ColumnId, Note, Task } from '../types';
-import { useStore, useT } from '../store';
+import type { ColumnId, Note, Scope, Task } from '../types';
+import { findAnyAgent, useStore, useT, useTeam } from '../store';
 import { COLUMN_COLORS, PRIORITY_COLORS } from '../scene/office';
-import { NOTE_COLORS } from '../data/seed';
-import { COLUMNS, overallProgress } from '../data/board';
-import { Avatar, Progress, Window } from './ui';
+import { COLUMNS, NOTE_COLORS } from '../../shared/constants';
+import { overallProgress } from '../data/board';
+import { Avatar, Progress, ScopeBadge, Window } from './ui';
+
+type ScopeFilter = 'all' | Scope;
 
 export function BoardModal({ z, onClose }: { z: number; onClose: () => void }) {
   const t = useT();
   const tasks = useStore((s) => s.tasks);
-  const agents = useStore((s) => s.agents);
   const notes = useStore((s) => s.notes);
+  const agents = useStore((s) => s.agents);
+  const teamAgents = useStore((s) => s.teamAgents);
   const { openModal, moveTask } = useStore.getState();
+  const [scope, setScope] = useState<ScopeFilter>('all');
   const [filter, setFilter] = useState<string>('');
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropCol, setDropCol] = useState<ColumnId | null>(null);
 
-  const visible = filter ? tasks.filter((x) => x.pipeline.includes(filter)) : tasks;
-  const visibleNotes = filter ? notes.filter((n) => n.to === filter || n.to === 'all') : notes;
+  const inScope = <T extends { scope: Scope }>(x: T) => scope === 'all' || x.scope === scope;
+  const visible = tasks.filter(inScope).filter((x) => !filter || x.pipeline.includes(filter));
+  const visibleNotes = notes.filter(inScope).filter((n) => !filter || n.to === filter || n.to === 'all');
+  const counts = { all: tasks.length, personal: tasks.filter((x) => x.scope === 'personal').length, shared: tasks.filter((x) => x.scope === 'shared').length };
 
   return (
     <Window z={z} title={`📋 ${t('board')}`} onClose={onClose} className="board-window" bodyClassName="board-body">
       <div className="board-toolbar">
-        <button className="btn primary" onClick={() => openModal({ kind: 'taskEdit' })}>＋ {t('newTask')}</button>
-        <button className="btn warn" onClick={() => openModal({ kind: 'noteEdit' })}>📝 {t('newNote')}</button>
-        <select className="select" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="filter">
-          <option value="">👥 {t('filterAll')}</option>
-          {agents.map((a) => (
-            <option key={a.id} value={a.id}>{a.name}</option>
+        <button className="btn primary" onClick={() => openModal({ kind: 'taskEdit', preset: scope === 'shared' ? { scope: 'shared' } : undefined })}>＋ {t('newTask')}</button>
+        <button className="btn warn" onClick={() => openModal({ kind: 'noteEdit', preset: scope === 'shared' ? { scope: 'shared' } : undefined })}>📝 {t('newNote')}</button>
+        <span className="seg" role="tablist">
+          {(['all', 'personal', 'shared'] as ScopeFilter[]).map((s) => (
+            <button key={s} role="tab" aria-selected={scope === s} className={`btn sm ${scope === s ? 'on' : ''}`} onClick={() => setScope(s)}>
+              {s === 'all' ? t('filterAllTasks') : s === 'personal' ? `🔒 ${t('scope_personal')}` : `👥 ${t('scope_shared')}`} ({counts[s]})
+            </button>
           ))}
+        </span>
+        <select className="select" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="filter">
+          <option value="">👤 {t('filterAll')}</option>
+          <optgroup label={t('myAgents')}>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </optgroup>
+          {teamAgents.length > 0 && (
+            <optgroup label={t('teamAgents')}>
+              {teamAgents.map((a) => (
+                <option key={a.id} value={a.id}>{a.name} ({a.ownerName})</option>
+              ))}
+            </optgroup>
+          )}
         </select>
         <span className="hint" style={{ marginLeft: 'auto' }}>{t('pipelineHint')}</span>
       </div>
@@ -47,7 +69,7 @@ export function BoardModal({ z, onClose }: { z: number; onClose: () => void }) {
               onDrop={(e) => {
                 e.preventDefault();
                 const id = e.dataTransfer.getData('text/plain');
-                if (id) moveTask(id, col);
+                if (id) void moveTask(id, col);
                 setDropCol(null);
                 setDragId(null);
               }}
@@ -65,7 +87,6 @@ export function BoardModal({ z, onClose }: { z: number; onClose: () => void }) {
                   <TaskCard
                     key={task.id}
                     task={task}
-                    agents={agents}
                     notes={notes}
                     dragging={dragId === task.id}
                     onDragStart={() => setDragId(task.id)}
@@ -80,22 +101,24 @@ export function BoardModal({ z, onClose }: { z: number; onClose: () => void }) {
             </div>
           );
         })}
-        <NotesColumn notes={visibleNotes} agents={agents} tasks={tasks} />
+        <NotesColumn notes={visibleNotes} tasks={tasks} />
       </div>
     </Window>
   );
 }
 
-export function PipelineView({ task, agents, size = 26 }: { task: Task; agents: Agent[]; size?: number }) {
+export function PipelineView({ task, size = 26 }: { task: Task; size?: number }) {
+  const s = useTeam();
   return (
     <div className="pipeline">
       {task.pipeline.map((id, i) => {
-        const a = agents.find((x) => x.id === id);
+        const a = findAnyAgent(s, id);
         const state = i < task.stage ? 'done' : i === task.stage && task.column !== 'done' ? 'current' : '';
+        const title = a ? (a.mine ? a.name : `${a.name} · ${a.ownerName}`) : '?';
         return (
           <span key={`${id}-${i}`} style={{ display: 'contents' }}>
             {i > 0 && <span className="pipe-arrow">▶</span>}
-            <span className={`pipe-step ${state}`} style={{ width: size, height: size + 2 }} title={a?.name ?? '?'}>
+            <span className={`pipe-step ${state} ${a && !a.mine ? 'team' : ''}`} style={{ width: size, height: size + 2 }} title={title}>
               {a ? <Avatar look={a.look} size={size - 4} /> : '?'}
               {state === 'done' && <span className="check">✓</span>}
             </span>
@@ -108,7 +131,6 @@ export function PipelineView({ task, agents, size = 26 }: { task: Task; agents: 
 
 function TaskCard(props: {
   task: Task;
-  agents: Agent[];
   notes: Note[];
   dragging: boolean;
   onDragStart: () => void;
@@ -116,8 +138,9 @@ function TaskCard(props: {
   onOpen: () => void;
 }) {
   const t = useT();
-  const { task, agents } = props;
-  const current = agents.find((a) => a.id === task.pipeline[task.stage]);
+  const { task } = props;
+  const me = useStore((s) => s.user?.id);
+  const current = findAnyAgent(useTeam(), task.pipeline[task.stage]);
   const noteCount = props.notes.filter((n) => n.taskId === task.id).length;
 
   let status: React.ReactNode = null;
@@ -132,7 +155,7 @@ function TaskCard(props: {
 
   return (
     <div
-      className={`card ${props.dragging ? 'dragging' : ''} ${task.active ? 'active' : ''}`}
+      className={`card ${props.dragging ? 'dragging' : ''} ${task.active ? 'active' : ''} ${task.scope === 'shared' ? 'shared' : ''}`}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData('text/plain', task.id);
@@ -145,12 +168,14 @@ function TaskCard(props: {
       <span className="prio" style={{ background: PRIORITY_COLORS[task.priority] }} />
       <div className="card-title">{task.title}</div>
       <div className="card-chips">
+        {task.scope === 'shared' && <ScopeBadge scope="shared" />}
+        {task.ownerId !== me && <span className="chip">👤 {task.ownerName}</span>}
         <span className="chip">{t(`prio_${task.priority}`)}</span>
         <span className="chip">{t(`size_${task.size}`)}</span>
         {noteCount > 0 && <span className="chip">📝 {noteCount}</span>}
         {task.outputs.length > 0 && <span className="chip">📄 {task.outputs.length}</span>}
       </div>
-      <PipelineView task={task} agents={agents} />
+      <PipelineView task={task} />
       {task.pipeline.length > 0 && (
         <div style={{ marginTop: 6 }}>
           <Progress value={overallProgress(task)} thin color={task.column === 'done' ? '#3fae6a' : '#f0a030'} />
@@ -161,9 +186,11 @@ function TaskCard(props: {
   );
 }
 
-function NotesColumn({ notes, agents, tasks }: { notes: Note[]; agents: Agent[]; tasks: Task[] }) {
+function NotesColumn({ notes, tasks }: { notes: Note[]; tasks: Task[] }) {
   const t = useT();
-  const openModal = useStore((s) => s.openModal);
+  const openModal = useStore((st) => st.openModal);
+  const s = useTeam();
+  const agents = s.agents;
   return (
     <div className="column notes-col">
       <div className="column-bar" style={{ background: '#f2c94c' }} />
@@ -176,10 +203,11 @@ function NotesColumn({ notes, agents, tasks }: { notes: Note[]; agents: Agent[];
       <div className="notes-list">
         {notes.length === 0 && <div className="hint" style={{ padding: 8 }}>{t('noNotes')}</div>}
         {[...notes].reverse().map((n, i) => {
-          const to = agents.find((a) => a.id === n.to);
+          const to = n.to === 'all' ? undefined : findAnyAgent(s, n.to);
           const task = tasks.find((x) => x.id === n.taskId);
-          const readers = agents.filter((a) => n.readBy.includes(a.id));
-          const expected = n.to === 'all' ? agents.length : 1;
+          // Who should read it: one agent, or every agent this note is for among the ones I can see.
+          const expected = n.to === 'all' ? (n.scope === 'shared' ? agents.length : agents.filter((a) => a.ownerId === n.createdBy).length) : 1;
+          const readers = n.to === 'all' ? agents.filter((a) => n.readBy.includes(a.id)) : n.readBy.includes(n.to) && to ? [to] : [];
           return (
             <div
               key={n.id}
@@ -188,13 +216,14 @@ function NotesColumn({ notes, agents, tasks }: { notes: Note[]; agents: Agent[];
               onClick={() => openModal({ kind: 'noteEdit', noteId: n.id })}
             >
               <div className="sticky-to">
-                → {to ? <><Avatar look={to.look} size={16} /> {to.name}</> : `👥 ${t('everyone')}`}
+                → {to ? <><Avatar look={to.look} size={16} /> {to.name}</> : `👥 ${n.scope === 'shared' ? t('everyoneTeam') : t('everyone')}`}
+                {n.scope === 'shared' && <span className="sticky-by">✍ {n.createdByName}</span>}
               </div>
               <div className="sticky-text">{n.text}</div>
               <div className="sticky-foot">
                 {task && <span>📋 {task.title}</span>}
                 <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 2, alignItems: 'center' }}>
-                  {readers.length >= expected ? '✓✓' : `${readers.length}/${expected}`}
+                  {expected > 0 && readers.length >= expected ? '✓✓' : `${readers.length}/${expected}`}
                   {readers.slice(0, 5).map((a) => (
                     <Avatar key={a.id} look={a.look} size={14} />
                   ))}

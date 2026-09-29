@@ -1,4 +1,4 @@
-import type { ModelDef, ProviderId } from '../types';
+import type { ModelDef, ProviderId } from './types';
 
 export interface ProviderInfo {
   id: ProviderId;

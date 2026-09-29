@@ -1,13 +1,14 @@
 import { useState } from 'react';
-import type { ColumnId, Priority, Size, Task } from '../types';
-import { useStore, useT } from '../store';
-import { roleById } from '../data/roles';
+import type { ColumnId, Priority, Scope, Size, Task } from '../types';
+import { findAnyAgent, useStore, useT, useTeam } from '../store';
+import { roleById } from '../../shared/roles';
 import { Avatar, Window } from './ui';
 
 export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose: () => void; taskId?: string; preset?: Partial<Task> }) {
   const t = useT();
-  const agents = useStore((s) => s.agents);
+  const team = useTeam();
   const models = useStore((s) => s.models);
+  const me = useStore((s) => s.user!);
   const existing = useStore((s) => s.tasks.find((x) => x.id === taskId));
   const { addTask, updateTask, openModal, deleteTask } = useStore.getState();
 
@@ -19,8 +20,14 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
   const [pipeline, setPipeline] = useState<string[]>(init.pipeline ?? []);
   const [requireReview, setRequireReview] = useState(init.requireReview ?? true);
   const [column, setColumn] = useState<ColumnId>(init.column ?? 'todo');
+  const [scope, setScope] = useState<Scope>(init.scope ?? 'personal');
   const [addId, setAddId] = useState('');
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const isOwner = !existing || existing.ownerId === me.id;
+  const canDelete = isOwner || (existing?.scope === 'shared' && me.role === 'Admin');
+  const othersInPipeline = pipeline.some((id) => !team.agents.some((a) => a.id === id));
 
   const move = (i: number, d: number) => {
     const next = [...pipeline];
@@ -30,19 +37,30 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
     setPipeline(next);
   };
 
-  const save = () => {
+  const save = async () => {
     if (!title.trim()) {
       setError(t('titleRequired'));
       return;
     }
-    const data = { title: title.trim(), description: description.trim(), priority, size, pipeline, requireReview };
-    if (existing) updateTask(existing.id, data);
-    else addTask({ ...data, column });
-    onClose();
+    if (scope === 'personal' && othersInPipeline) {
+      setError(t('personalOwnOnly'));
+      return;
+    }
+    const data = { title: title.trim(), description: description.trim(), priority, size, pipeline, requireReview, scope };
+    setBusy(true);
+    try {
+      if (existing) await updateTask(existing.id, data);
+      else await addTask({ ...data, column });
+      onClose();
+    } catch {
+      /* server message already shown */
+    } finally {
+      setBusy(false);
+    }
   };
 
   const agentOption = (id: string) => {
-    const a = agents.find((x) => x.id === id);
+    const a = team.agents.find((x) => x.id === id);
     if (!a) return '?';
     const m = models.find((x) => x.id === a.modelId);
     return `${roleById(a.role).icon} ${a.name} — ${a.role === 'custom' && a.roleLabel ? a.roleLabel : t(`role_${a.role}`)} · ${m?.name ?? a.modelId}`;
@@ -51,12 +69,12 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
   return (
     <Window
       z={z}
-      width={620}
+      width={640}
       title={existing ? `✏️ ${t('editTaskTitle')}` : `＋ ${t('newTaskTitle')}`}
       onClose={onClose}
       footer={
         <>
-          {existing && (
+          {existing && canDelete && (
             <div className="left">
               <button
                 className="btn danger"
@@ -64,8 +82,7 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
                   openModal({
                     kind: 'confirm', danger: true, message: t('deleteTaskConfirm'),
                     onYes: () => {
-                      deleteTask(existing.id);
-                      onClose();
+                      void deleteTask(existing.id).then(onClose, () => {});
                     },
                   })
                 }
@@ -76,13 +93,24 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
           )}
           {error && <span className="error">{error}</span>}
           <button className="btn" onClick={onClose}>{t('cancel')}</button>
-          <button className="btn primary" onClick={save}>💾 {t('save')}</button>
+          <button className="btn primary" onClick={() => void save()} disabled={busy}>💾 {t('save')}</button>
         </>
       }
     >
       <div className="field">
+        <span className="field-label">{t('scope')}</span>
+        <span className="seg">
+          {(['personal', 'shared'] as Scope[]).map((s) => (
+            <button key={s} className={`btn sm ${scope === s ? 'on' : ''}`} disabled={!isOwner} onClick={() => setScope(s)}>
+              {s === 'personal' ? `🔒 ${t('scope_personal')}` : `👥 ${t('scope_shared')}`}
+            </button>
+          ))}
+        </span>
+        <span className="hint">{scope === 'personal' ? t('scopeHint_personal') : t('scopeHint_shared')}</span>
+      </div>
+      <div className="field">
         <label htmlFor="task-title">{t('title')}</label>
-        <input id="task-title" className="input" value={title} autoFocus onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && save()} />
+        <input id="task-title" className="input" value={title} maxLength={120} autoFocus onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void save()} />
       </div>
       <div className="field">
         <label htmlFor="task-desc">{t('description')}</label>
@@ -119,23 +147,26 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
 
       <div className="field">
         <span className="field-label">{t('pipeline')}</span>
-        <span className="hint">{t('pipelineHint')}</span>
+        <span className="hint">{scope === 'shared' ? t('pipelineHintShared') : t('pipelineHint')}</span>
         <div style={{ marginTop: 6 }}>
           {pipeline.map((id, i) => {
-            const a = agents.find((x) => x.id === id);
+            const a = findAnyAgent(team, id);
+            const mine = a?.mine ?? false;
             return (
               <div className="step-row" key={`${id}-${i}`}>
                 <span className="step-num">{i + 1}</span>
                 {a ? <Avatar look={a.look} size={28} /> : <span />}
-                <select
-                  className="select"
-                  value={id}
-                  onChange={(e) => setPipeline(pipeline.map((x, j) => (j === i ? e.target.value : x)))}
-                >
-                  {agents.map((ag) => (
-                    <option key={ag.id} value={ag.id}>{agentOption(ag.id)}</option>
-                  ))}
-                </select>
+                {mine ? (
+                  <select className="select" value={id} onChange={(e) => setPipeline(pipeline.map((x, j) => (j === i ? e.target.value : x)))}>
+                    {team.agents.map((ag) => (
+                      <option key={ag.id} value={ag.id}>{agentOption(ag.id)}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="team-step">
+                    {a ? `${a.name} — ${t(`role_${a.role}`)}` : '?'} <span className="chip">👤 {a && !a.mine ? a.ownerName : '?'}</span>
+                  </div>
+                )}
                 <span className="row" style={{ gap: 2, flexWrap: 'nowrap' }}>
                   <button className="btn sm icon" onClick={() => move(i, -1)} disabled={i === 0} aria-label="up">▲</button>
                   <button className="btn sm icon" onClick={() => move(i, 1)} disabled={i === pipeline.length - 1} aria-label="down">▼</button>
@@ -147,7 +178,7 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
           <div className="row" style={{ marginTop: 4 }}>
             <select className="select" style={{ flex: 1 }} value={addId} onChange={(e) => setAddId(e.target.value)}>
               <option value="">— {t('addStep')} —</option>
-              {agents.map((a) => (
+              {team.agents.map((a) => (
                 <option key={a.id} value={a.id}>{agentOption(a.id)}</option>
               ))}
             </select>

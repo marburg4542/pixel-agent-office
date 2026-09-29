@@ -105,17 +105,17 @@ function Tooltip({ target, x, y }: { target: HoverTarget; x: number; y: number }
   else if (target.kind === 'desk') body = <div>🪑 {t('clickToHire')}</div>;
   else {
     const a = agents.find((x) => x.id === target.id);
-    const rt = engine.agents.get(target.id);
-    if (!a || !rt) return null;
-    const task = rt.work && tasks.find((x) => x.id === rt.work!.taskId);
+    const va = engine.agents.get(target.id);
+    if (!a || !va) return null;
+    const task = va.status === 'working' ? tasks.find((x) => x.id === va.taskId) : undefined;
     const unread = engine.unreadNotes(a.id).length;
     body = (
       <>
         <div className="tt-title">{a.name}</div>
         <div className="tt-sub"><RoleLabel agent={a} /> · <ModelLabel modelId={a.modelId} /></div>
         <div style={{ marginTop: 4 }}>
-          {t(`st_${rt.status}`)}
-          {task && ` — ${task.title} (${Math.floor(rt.work!.progress)}%)`}
+          {t(`st_${va.status}`)}
+          {task && ` — ${task.title} (${Math.floor(va.progress)}%)`}
         </div>
         {unread > 0 && <div className="tt-sub">📩 {unread} {t('unread')}</div>}
       </>
