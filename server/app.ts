@@ -13,7 +13,7 @@ export function createApp() {
   // Trust only the loopback proxy (cloudflared runs on localhost) so rate limits see real client IPs.
   app.set('trust proxy', 'loopback');
   app.use(cors({ origin: config.frontendUrls, credentials: true }));
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '5mb' })); // office backups with task history can be a few MB
 
   // File names are timestamp + random, never reused — safe to cache for a long time.
   app.use('/uploads', express.static(UPLOADS_DIR, { maxAge: '30d', immutable: true }));

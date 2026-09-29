@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore, useT, MAX_DESKS } from '../store';
 import { SIM_SPEEDS } from '../../shared/constants';
 import { api } from '../lib/api';
@@ -34,9 +34,19 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
   const { setLang, togglePause, setSpeed, openModal } = useStore.getState();
   const isAdmin = user?.role === 'Admin';
   const pending = usePendingCount(isAdmin);
+  const ref = useRef<HTMLElement>(null);
+
+  // Drawers sit just under the bar, which wraps to two rows on narrow screens.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => document.documentElement.style.setProperty('--topbar-h', `${el.offsetHeight}px`));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   return (
-    <header className="topbar">
+    <header className="topbar" ref={ref}>
       <div className="brand">
         <svg className="brand-logo pixelated" viewBox="0 0 13 13" shapeRendering="crispEdges" aria-hidden>
           <rect width="13" height="13" fill="#3b3552" />
@@ -89,6 +99,8 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
             {pending > 0 && <span className="badge">{pending}</span>}
           </button>
         )}
+        <button className="btn dark sm sidebar-toggle" onClick={() => document.body.classList.toggle('show-sidebar')} aria-label={t('team')}>👥</button>
+        <button className="btn dark sm icon" onClick={() => openModal({ kind: 'help' })} title={t('help')} aria-label={t('help')}>?</button>
         <button className="btn dark sm" onClick={() => setLang(lang === 'th' ? 'en' : 'th')}>🌐 {t('language')}</button>
         <button className="btn dark sm user-chip" onClick={() => openModal({ kind: 'settings' })} title={t('settings')}>
           {user && <UserAvatar user={user} size={20} />}

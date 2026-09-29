@@ -2,8 +2,22 @@ import { useEffect, useState } from 'react';
 import { findAnyAgent, useStore, useT, useTeam } from '../store';
 import { engine } from '../sim/engine';
 import { translate } from '../../shared/i18n';
-import { NOTE_COLORS } from '../../shared/constants';
+import { COLUMNS, NOTE_COLORS } from '../../shared/constants';
 import { clockTime } from '../util';
+import { copyText, downloadText, slug } from '../lib/files';
+import type { ColumnId, Lang, Task } from '../types';
+import { Markdown } from './Markdown';
+
+/** All step results as one Markdown document. */
+function resultsMarkdown(task: Task, lang: Lang): string {
+  const parts = [`# ${task.title}`, task.description].filter(Boolean);
+  for (let i = 0; i < task.pipeline.length; i++) {
+    const out = [...task.outputs].reverse().find((o) => o.stage === i);
+    if (!out) continue;
+    parts.push(`## ${translate(lang, 'stage')} ${i + 1} — ${out.agentName} (${out.modelName})`, out.text);
+  }
+  return parts.join('\n\n') + '\n';
+}
 import { COLUMN_COLORS, PRIORITY_COLORS } from '../scene/office';
 import { overallProgress } from '../data/board';
 import { play } from '../lib/sound';
@@ -17,7 +31,7 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
   const me = useStore((s) => s.user!);
   const team = useTeam();
   const allNotes = useStore((s) => s.notes);
-  const { openModal, approveTask, requestChanges, restartTask } = useStore.getState();
+  const { openModal, approveTask, requestChanges, restartTask, moveTask } = useStore.getState();
   const [fbOpen, setFbOpen] = useState(false);
   const [fbText, setFbText] = useState('');
   const [fbAgent, setFbAgent] = useState('');
@@ -66,6 +80,14 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
         <span className="chip">{t('size')}: {t(`size_${task.size}`)}</span>
         {task.ownerId !== me.id && <span className="chip">👤 {task.ownerName}</span>}
         <span className="hint" style={{ marginLeft: 'auto' }}>{t('created')} {new Date(task.createdAt).toLocaleString(lang === 'th' ? 'th-TH' : 'en-US')}</span>
+        <label className="row" style={{ gap: 4 }}>
+          <span className="hint">{t('moveTo')}</span>
+          <select className="select" style={{ width: 'auto', padding: '2px 6px' }} value={task.column} onChange={(e) => void moveTask(taskId, e.target.value as ColumnId)}>
+            {COLUMNS.map((c) => (
+              <option key={c} value={c}>{t(`col_${c}`)}</option>
+            ))}
+          </select>
+        </label>
       </div>
       {task.description && <p style={{ margin: '4px 0 12px', whiteSpace: 'pre-wrap' }}>{task.description}</p>}
 
@@ -137,7 +159,14 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
         </div>
       )}
 
-      <div className="section-title">🧾 {t('outputs')}</div>
+      <div className="section-title">
+        🧾 {t('outputs')}
+        {task.outputs.length > 0 && (
+          <button className="btn sm" style={{ marginLeft: 'auto' }} onClick={() => downloadText(`${slug(task.title)}.md`, resultsMarkdown(task, lang))}>
+            ⬇ {t('downloadAll')}
+          </button>
+        )}
+      </div>
       <div className="stage-list">
         {task.pipeline.length === 0 && <div className="hint">⚠ {t('unassigned')}</div>}
         {task.pipeline.map((id, i) => {
@@ -176,10 +205,16 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
               )}
               {out ? (
                 <div className="stage-out">
-                  {out.text}
-                  <div className="hint" style={{ marginTop: 6 }}>
-                    — {out.modelName} · {clockTime(out.at)}
-                    {out.simulated && <> · <em>{t('simulatedTag')}</em></>}
+                  <Markdown text={out.text} />
+                  <div className="row stage-out-foot">
+                    <span className="hint">
+                      — {out.modelName} · {clockTime(out.at)}
+                      {out.simulated && <> · <em>{t('simulatedTag')}</em></>}
+                    </span>
+                    <span style={{ marginLeft: 'auto' }} className="row">
+                      <button className="btn sm" onClick={() => void copyText(out.text, t('copied'), t('copyFailed'))}>📋 {t('copy')}</button>
+                      <button className="btn sm" onClick={() => downloadText(`${slug(task.title)}-${i + 1}-${slug(out.agentName)}.md`, out.text)}>⬇ .md</button>
+                    </span>
                   </div>
                 </div>
               ) : (

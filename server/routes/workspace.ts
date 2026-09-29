@@ -35,6 +35,11 @@ router.get(
   }),
 );
 
+// Backup / restore / start over
+router.get('/workspace/export', h((req) => store.exportOffice(req.user!.id)));
+router.post('/workspace/import', h((req) => store.importOffice(req.user!, req.body)));
+router.post('/workspace/reset', h((req) => (store.resetOffice(req.user!), true)));
+
 // Agents
 router.post('/agents', h((req) => store.createAgent(req.user!, req.body ?? {})));
 router.put('/agents/:id', h((req) => store.updateAgent(req.user!, String(req.params.id), req.body ?? {})));

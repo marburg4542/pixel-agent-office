@@ -5,6 +5,8 @@ import { session } from '../lib/session';
 import { toast } from '../lib/toast';
 import { play } from '../lib/sound';
 import { shrinkAvatar } from '../lib/image';
+import { downloadText, slug } from '../lib/files';
+import { desktopNotify } from '../lib/officeHooks';
 import { useUsernameCheck, usernameHintClass } from '../lib/useUsernameCheck';
 import { usernameHint, validatePassword } from '../../shared/credentialPolicy';
 import { KEY_PROVIDERS, type KeyProviderDef } from '../../shared/keys';
@@ -18,15 +20,16 @@ export function SettingsWindow({ z, onClose, tab: initialTab }: { z: number; onC
   return (
     <Window z={z} width={720} title={`⚙ ${t('settings')}`} onClose={onClose}>
       <div className="tabs" role="tablist">
-        {(['profile', 'sound', 'keys'] as SettingsTab[]).map((k) => (
+        {(['profile', 'sound', 'keys', 'data'] as SettingsTab[]).map((k) => (
           <button key={k} role="tab" aria-selected={tab === k} className={`tab ${tab === k ? 'on' : ''}`} onClick={() => setTab(k)}>
-            {k === 'profile' ? `👤 ${t('set_profile')}` : k === 'sound' ? `🔊 ${t('set_sound')}` : `🔑 ${t('set_keys')}`}
+            {{ profile: `👤 ${t('set_profile')}`, sound: `🔊 ${t('set_sound')}`, keys: `🔑 ${t('set_keys')}`, data: `💾 ${t('set_data')}` }[k]}
           </button>
         ))}
       </div>
       {tab === 'profile' && <ProfileTab />}
       {tab === 'sound' && <SoundTab />}
       {tab === 'keys' && <KeysTab />}
+      {tab === 'data' && <DataTab />}
     </Window>
   );
 }
@@ -205,7 +208,127 @@ function SoundTab() {
           <button className={`btn sm ${settings.lang === 'en' ? 'on' : ''}`} onClick={() => setLang('en')}>English</button>
         </span>
       </div>
+      <NotifyRow />
       <p className="hint">{t('set_soundHint')}</p>
+    </div>
+  );
+}
+
+/** Desktop notifications are a per-browser permission, so this switch lives in the browser, not the account. */
+function NotifyRow() {
+  const t = useT();
+  const [on, setOn] = useState(desktopNotify.enabled());
+  const supported = 'Notification' in window;
+  return (
+    <div className="opt-row">
+      <label>{t('set_notify')}</label>
+      <div>
+        <span className="seg">
+          <button
+            className={`btn sm ${on ? 'on' : ''}`}
+            disabled={!supported}
+            onClick={async () => {
+              const ok = await desktopNotify.enable();
+              setOn(ok);
+              if (!ok) toast.warn(t('set_notifyBlocked'));
+            }}
+          >
+            🔔 {t('on')}
+          </button>
+          <button
+            className={`btn sm ${!on ? 'on' : ''}`}
+            onClick={() => {
+              desktopNotify.disable();
+              setOn(false);
+            }}
+          >
+            🔕 {t('off')}
+          </button>
+        </span>
+        <div className="hint">{supported ? t('set_notifyHint') : t('set_notifyUnsupported')}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Backup / restore / start over ───────────────────────────────────────────
+
+function DataTab() {
+  const t = useT();
+  const openModal = useStore((s) => s.openModal);
+  const username = useStore((s) => s.user?.username ?? 'office');
+  const [busy, setBusy] = useState(false);
+
+  const exportOffice = async () => {
+    setBusy(true);
+    try {
+      const data = await api<unknown>('/workspace/export');
+      const day = new Date().toISOString().slice(0, 10);
+      downloadText(`pixel-office-${slug(username)}-${day}.json`, JSON.stringify(data, null, 2), 'application/json');
+    } catch {
+      /* shown */
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const importOffice = async (file: File | undefined) => {
+    if (!file) return;
+    let data: unknown;
+    try {
+      data = JSON.parse(await file.text());
+    } catch {
+      toast.error(t('data_badFile'));
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await api<{ agents: number; tasks: number; notes: number; models: number; skippedAgents: number }>('/workspace/import', { method: 'POST', body: data });
+      toast.success(t('data_imported', r));
+      if (r.skippedAgents) toast.warn(t('data_skippedAgents', { n: r.skippedAgents }));
+    } catch {
+      /* shown */
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="section-title" style={{ marginTop: 0 }}>⬇ {t('data_export')}</div>
+      <p className="hint">{t('data_exportHint')}</p>
+      <button className="btn primary" disabled={busy} onClick={() => void exportOffice()}>⬇ {t('data_exportBtn')}</button>
+
+      <div className="section-title">⬆ {t('data_import')}</div>
+      <p className="hint">{t('data_importHint')}</p>
+      <label className="btn">
+        ⬆ {t('data_importBtn')}
+        <input type="file" accept="application/json,.json" className="visually-hidden" disabled={busy} onChange={(e) => void importOffice(e.target.files?.[0])} />
+      </label>
+
+      <div className="section-title">↺ {t('data_reset')}</div>
+      <p className="hint">{t('data_resetHint')}</p>
+      <button
+        className="btn danger"
+        disabled={busy}
+        onClick={() =>
+          openModal({
+            kind: 'confirm',
+            danger: true,
+            message: t('data_resetConfirm'),
+            onYes: async () => {
+              try {
+                await api('/workspace/reset', { method: 'POST' });
+                toast.success(t('data_resetDone'));
+              } catch {
+                /* shown */
+              }
+            },
+          })
+        }
+      >
+        ↺ {t('data_resetBtn')}
+      </button>
     </div>
   );
 }

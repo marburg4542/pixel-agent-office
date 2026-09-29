@@ -680,6 +680,128 @@ export function workspaceFor(user: PublicUser) {
   };
 }
 
+// ─── Export / import / reset ─────────────────────────────────────────────────
+
+export interface OfficeExport {
+  app: 'pixel-agent-office';
+  version: 1;
+  exportedAt: number;
+  settings: UserSettings;
+  models: ModelDef[];
+  agents: Agent[];
+  tasks: Task[];
+  notes: Note[];
+}
+
+/** Everything that belongs to one person: their agents, models, tasks they own, notes they wrote. */
+export function exportOffice(userId: number): OfficeExport {
+  return {
+    app: 'pixel-agent-office',
+    version: 1,
+    exportedAt: Date.now(),
+    settings: publicSettings(userId),
+    models: modelsOf(userId),
+    agents: agentsOf(userId),
+    tasks: [...tasks.values()].filter((t) => t.ownerId === userId).map((t) => ({ ...t, active: false })),
+    notes: [...notes.values()].filter((n) => n.createdBy === userId),
+  };
+}
+
+/**
+ * Add a backup's contents to this office (nothing is overwritten). Everything gets fresh ids;
+ * agents only come in while desks are free, and pipeline steps pointing at skipped agents are dropped.
+ */
+export function importOffice(u: AuthUser, data: unknown): { agents: number; tasks: number; notes: number; models: number; skippedAgents: number } {
+  const d = data as Partial<OfficeExport>;
+  if (!d || d.app !== 'pixel-agent-office' || !Array.isArray(d.agents) || !Array.isArray(d.tasks)) {
+    throw new ApiError(400, 'ไฟล์นี้ไม่ใช่ไฟล์สำรองของ Pixel Agent Office', "This isn't a Pixel Agent Office backup file");
+  }
+  const counts = { agents: 0, tasks: 0, notes: 0, models: 0, skippedAgents: 0 };
+
+  // Models: add the ones this library doesn't have yet (matched by id).
+  const have = new Set(modelsOf(u.id).map((m) => m.id));
+  const newModels = (Array.isArray(d.models) ? d.models : []).filter((m) => m && m.id && !have.has(m.id)).slice(0, 50);
+  if (newModels.length) {
+    setModels(u.id, [...modelsOf(u.id), ...newModels.map((m) => ({ ...m, ...sanitizeModel(m), custom: true }) as ModelDef)]);
+    counts.models = newModels.length;
+  }
+
+  const idMap = new Map<string, string>();
+  const fallbackModel = modelsOf(u.id)[0]?.id;
+  for (const a of d.agents.slice(0, MAX_DESKS * 2)) {
+    const free = [...Array(MAX_DESKS).keys()].find((i) => !agentsOf(u.id).some((x) => x.desk === i));
+    if (free === undefined) {
+      counts.skippedAgents++;
+      continue;
+    }
+    try {
+      const modelId = modelsOf(u.id).some((m) => m.id === a.modelId) ? a.modelId : fallbackModel;
+      const created = createAgent(u, { ...a, desk: agentsOf(u.id).some((x) => x.desk === a.desk) ? free : a.desk, modelId });
+      idMap.set(a.id, created.id);
+      counts.agents++;
+    } catch {
+      counts.skippedAgents++;
+    }
+  }
+
+  const taskMap = new Map<string, string>();
+  for (const t of d.tasks.slice(0, 500)) {
+    if (!t || typeof t.title !== 'string') continue;
+    const pipeline = (t.pipeline ?? []).map((id) => idMap.get(id)).filter((x): x is string => !!x);
+    const stage = Math.min(Math.max(0, Number(t.stage) || 0), pipeline.length);
+    const task = makeTask({
+      scope: t.scope === 'shared' ? 'shared' : 'personal',
+      ownerId: u.id,
+      title: String(t.title).slice(0, 120),
+      description: String(t.description ?? '').slice(0, 4000),
+      priority: PRIORITIES.includes(t.priority) ? t.priority : 'med',
+      size: SIZES.includes(t.size) ? t.size : 'M',
+      pipeline,
+      stage,
+      column: (['backlog', 'todo', 'doing', 'review', 'done'] as ColumnId[]).includes(t.column) ? t.column : 'backlog',
+      requireReview: t.requireReview !== false,
+      outputs: Array.isArray(t.outputs) ? t.outputs.slice(-20).map((o) => ({ ...o, agentId: idMap.get(o.agentId) ?? o.agentId })) : [],
+      log: [...(Array.isArray(t.log) ? t.log.slice(-40) : []), { at: Date.now(), key: 'log_imported' }],
+      createdAt: Number(t.createdAt) || Date.now(),
+    });
+    taskMap.set(t.id, task.id);
+    commitTask(task);
+    counts.tasks++;
+  }
+
+  for (const n of (Array.isArray(d.notes) ? d.notes : []).slice(0, 500)) {
+    if (!n || typeof n.text !== 'string') continue;
+    const to = n.to === 'all' ? 'all' : idMap.get(n.to);
+    if (!to) continue;
+    commitNote({
+      id: uid(), scope: n.scope === 'shared' ? 'shared' : 'personal', createdBy: u.id, createdByName: u.username, text: n.text.slice(0, 1000),
+      to, taskId: n.taskId ? taskMap.get(n.taskId) : undefined, color: clampInt(n.color, 0, 4), createdAt: Number(n.createdAt) || Date.now(), readBy: [],
+    });
+    counts.notes++;
+  }
+  return counts;
+}
+
+/** Start over: remove this person's agents, tasks and notes, and bring back the starter team. */
+export function resetOffice(u: AuthUser): void {
+  for (const a of agentsOf(u.id)) removeAgent(a);
+  for (const t of [...tasks.values()]) {
+    if (t.ownerId !== u.id) continue;
+    tasks.delete(t.id);
+    q.taskDelete.run(t.id);
+    sendTo(taskAudience(t), 'task-deleted', { id: t.id });
+  }
+  for (const n of [...notes.values()]) {
+    if (n.createdBy !== u.id) continue;
+    notes.delete(n.id);
+    q.noteDelete.run(n.id);
+    sendTo(noteAudience(n), 'note-deleted', { id: n.id });
+  }
+  setModels(u.id, DEFAULT_MODELS.map((m) => ({ ...m })));
+  getSettings(u.id).seeded = false;
+  ensureSeeded(u.id);
+}
+
 /** Forget everything a deleted user owned (the database rows go with ON DELETE CASCADE). */
 export function forgetUser(userId: number): void {
   for (const a of agentsOf(userId)) removeAgent(a);

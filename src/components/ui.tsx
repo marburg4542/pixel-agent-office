@@ -25,19 +25,26 @@ export function Window(props: {
   className?: string;
   bodyClassName?: string;
   z: number;
+  /** 'drawer' docks to the right edge without covering the office. */
+  variant?: 'modal' | 'drawer';
+  actions?: ReactNode;
 }) {
+  const drawer = props.variant === 'drawer';
   return (
     <div
-      className="overlay"
+      className={`overlay ${drawer ? 'drawer' : ''}`}
       style={{ zIndex: 20 + props.z }}
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) props.onClose();
+        if (!drawer && e.target === e.currentTarget) props.onClose();
       }}
     >
-      <div className={`window ${props.className ?? ''}`} style={{ width: props.width }} role="dialog" aria-modal="true">
+      <div className={`window ${props.className ?? ''}`} style={{ width: drawer ? undefined : props.width }} role="dialog" aria-modal={!drawer}>
         <div className="titlebar">
           <span>{props.title}</span>
-          <button className="x" onClick={props.onClose} aria-label="close">✕</button>
+          <span className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+            {props.actions}
+            <button className="x" onClick={props.onClose} aria-label="close">✕</button>
+          </span>
         </div>
         <div className={`window-body ${props.bodyClassName ?? ''}`}>{props.children}</div>
         {props.footer && <div className="window-foot">{props.footer}</div>}

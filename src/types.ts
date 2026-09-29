@@ -12,6 +12,7 @@ export type Modal =
   | { kind: 'models' }
   | { kind: 'settings'; tab?: SettingsTab }
   | { kind: 'users' }
+  | { kind: 'help'; step?: number }
   | { kind: 'confirm'; message: string; onYes: () => void; danger?: boolean };
 
-export type SettingsTab = 'profile' | 'sound' | 'keys';
+export type SettingsTab = 'profile' | 'sound' | 'keys' | 'data';

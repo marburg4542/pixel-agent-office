@@ -12,7 +12,11 @@ import {
   drawPlant, drawProgress, drawWallNotes, drawWaterCooler, drawWindows, rect, text,
 } from './office';
 
-export type HoverTarget = { kind: 'agent'; id: string } | { kind: 'board' } | { kind: 'desk'; index: number };
+export type HoverTarget =
+  | { kind: 'agent'; id: string }
+  | { kind: 'board' }
+  | { kind: 'desk'; index: number }
+  | { kind: 'note'; id: string };
 
 const PRIO = { high: 0, med: 1, low: 2 } as const;
 
@@ -127,6 +131,13 @@ export function hitTest(p: Pt, s: State): HoverTarget | null {
   const vas = [...engine.agents.values()].sort((a, b) => b.y - a.y);
   for (const va of vas) {
     if (Math.abs(p.x - va.x) <= 7 && p.y >= va.y - 26 && p.y <= va.y) return { kind: 'agent', id: va.id };
+  }
+  // Individual sticky notes on the wall (same grid as drawWallNotes).
+  if (inRect(p, NOTES_AREA)) {
+    const col = Math.floor((p.x - NOTES_AREA.x) / 11);
+    const row = Math.floor((p.y - NOTES_AREA.y + 1) / 10);
+    const n = s.notes[row * 3 + col];
+    if (col < 3 && n && (p.x - NOTES_AREA.x) % 11 < 9) return { kind: 'note', id: n.id };
   }
   if (inRect(p, { x: BOARD.x, y: BOARD.y - 6, w: BOARD.w, h: BOARD.h + 6 }) || inRect(p, NOTES_AREA)) return { kind: 'board' };
   for (const d of DESKS) {

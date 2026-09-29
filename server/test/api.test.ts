@@ -188,6 +188,29 @@ test('adding a step to a task waiting for review sends it back to work', async (
   assert.equal(more.data.stage, 1);
 });
 
+test('export, reset and import an office', async () => {
+  const backup = (await call('/workspace/export', { token: adminToken })).data;
+  assert.equal(backup.app, 'pixel-agent-office');
+  assert.equal(backup.agents.length, 5);
+  const taskCount = backup.tasks.length;
+
+  await call('/workspace/reset', { method: 'POST', token: adminToken });
+  const fresh = (await call('/workspace', { token: adminToken })).data;
+  assert.equal(fresh.agents.length, 5, 'starter team is back');
+  assert.ok(!fresh.agents.some((a: { id: string }) => backup.agents.some((b: { id: string }) => b.id === a.id)), 'with new agents');
+
+  const res = await call('/workspace/import', { method: 'POST', token: adminToken, body: backup });
+  assert.equal(res.status, 200);
+  assert.equal(res.data.agents, 3, 'only 3 desks were free');
+  assert.equal(res.data.skippedAgents, 2);
+  assert.equal(res.data.tasks, taskCount);
+  const after = (await call('/workspace', { token: adminToken })).data;
+  assert.equal(after.agents.length, 8);
+
+  const bad = await call('/workspace/import', { method: 'POST', token: adminToken, body: { hello: 1 } });
+  assert.equal(bad.status, 400);
+});
+
 test('API keys are stored encrypted and only a hint comes back', async () => {
   const saved = await call('/keys/openai', { method: 'PUT', token: bobToken, body: { key: 'sk-test-abcdefgh12345678' } });
   assert.equal(saved.status, 200);

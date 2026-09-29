@@ -10,6 +10,7 @@ import { TaskDetail } from './TaskDetail';
 import { TaskEditor } from './TaskEditor';
 import { SettingsWindow } from './SettingsWindow';
 import { UsersWindow } from './UsersWindow';
+import { HelpWindow } from './HelpWindow';
 import { Window } from './ui';
 
 export function ModalHost() {
@@ -55,6 +56,8 @@ function ModalView({ modal, z }: { modal: Modal; z: number }) {
       return <SettingsWindow z={z} onClose={onClose} tab={modal.tab} />;
     case 'users':
       return <UsersWindow z={z} onClose={onClose} />;
+    case 'help':
+      return <HelpWindow z={z} onClose={onClose} step={modal.step} />;
     case 'confirm':
       return <Confirm z={z} modal={modal} onClose={onClose} />;
   }

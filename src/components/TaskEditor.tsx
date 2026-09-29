@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import type { ColumnId, Priority, Scope, Size, Task } from '../types';
+import type { ColumnId, Priority, RoleId, Scope, Size, Task } from '../types';
+import { PIPELINE_TEMPLATES } from '../data/templates';
+import { toast } from '../lib/toast';
 import { findAnyAgent, useStore, useT, useTeam } from '../store';
 import { roleById } from '../../shared/roles';
 import { Avatar, Window } from './ui';
@@ -21,13 +23,25 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
   const [requireReview, setRequireReview] = useState(init.requireReview ?? true);
   const [column, setColumn] = useState<ColumnId>(init.column ?? 'todo');
   const [scope, setScope] = useState<Scope>(init.scope ?? 'personal');
-  const [addId, setAddId] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const isOwner = !existing || existing.ownerId === me.id;
   const canDelete = isOwner || (existing?.scope === 'shared' && me.role === 'Admin');
   const othersInPipeline = pipeline.some((id) => !team.agents.some((a) => a.id === id));
+
+  /** Fill the pipeline with my agents for each role in the template; say which roles nobody has. */
+  const applyTemplate = (roles: RoleId[]) => {
+    const picked: string[] = [];
+    const missing: RoleId[] = [];
+    for (const r of roles) {
+      const a = team.agents.find((x) => x.role === r);
+      if (a) picked.push(a.id);
+      else missing.push(r);
+    }
+    setPipeline(picked);
+    if (missing.length) toast.warn(t('tplMissing', { roles: missing.map((r) => t(`role_${r}`)).join(', ') }));
+  };
 
   const move = (i: number, d: number) => {
     const next = [...pipeline];
@@ -175,23 +189,22 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
               </div>
             );
           })}
-          <div className="row" style={{ marginTop: 4 }}>
-            <select className="select" style={{ flex: 1 }} value={addId} onChange={(e) => setAddId(e.target.value)}>
-              <option value="">— {t('addStep')} —</option>
-              {team.agents.map((a) => (
-                <option key={a.id} value={a.id}>{agentOption(a.id)}</option>
-              ))}
-            </select>
-            <button
-              className="btn success"
-              disabled={!addId}
-              onClick={() => {
-                setPipeline([...pipeline, addId]);
-                setAddId('');
-              }}
-            >
-              ＋ {t('addStep')}
-            </button>
+          <div className="agent-chips" role="group" aria-label={t('addStep')}>
+            <span className="hint">＋ {t('clickToAddStep')}</span>
+            {team.agents.map((a) => (
+              <button key={a.id} className="agent-chip" title={agentOption(a.id)} aria-label={`${t('addStep')}: ${a.name}`} onClick={() => setPipeline([...pipeline, a.id])}>
+                <Avatar look={a.look} size={24} />
+                <span>{a.name}</span>
+              </button>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 6, gap: 6 }}>
+            <span className="hint">📐 {t('templates')}:</span>
+            {PIPELINE_TEMPLATES.map((tp) => (
+              <button key={tp.id} className="btn sm" title={tp.roles.map((r) => t(`role_${r}`)).join(' → ')} onClick={() => applyTemplate(tp.roles)}>
+                {tp.icon} {t(`tpl_${tp.id}`)}
+              </button>
+            ))}
           </div>
         </div>
       </div>

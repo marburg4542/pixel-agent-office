@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ColumnId, Note, Scope, Task } from '../types';
 import { findAnyAgent, useStore, useT, useTeam } from '../store';
 import { COLUMN_COLORS, PRIORITY_COLORS } from '../scene/office';
@@ -19,6 +19,25 @@ export function BoardModal({ z, onClose }: { z: number; onClose: () => void }) {
   const [filter, setFilter] = useState<string>('');
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropCol, setDropCol] = useState<ColumnId | null>(null);
+  const [docked, setDocked] = useState(() => {
+    try {
+      return localStorage.getItem('pao.boardDocked') !== '0';
+    } catch {
+      return true;
+    }
+  });
+
+  // Docked: the office shrinks to the left so agents stay visible while you manage tasks.
+  useEffect(() => {
+    try {
+      localStorage.setItem('pao.boardDocked', docked ? '1' : '0');
+    } catch {
+      /* private mode */
+    }
+    if (!docked) return;
+    document.body.classList.add('board-docked');
+    return () => document.body.classList.remove('board-docked');
+  }, [docked]);
 
   const inScope = <T extends { scope: Scope }>(x: T) => scope === 'all' || x.scope === scope;
   const visible = tasks.filter(inScope).filter((x) => !filter || x.pipeline.includes(filter));
@@ -26,7 +45,19 @@ export function BoardModal({ z, onClose }: { z: number; onClose: () => void }) {
   const counts = { all: tasks.length, personal: tasks.filter((x) => x.scope === 'personal').length, shared: tasks.filter((x) => x.scope === 'shared').length };
 
   return (
-    <Window z={z} title={`📋 ${t('board')}`} onClose={onClose} className="board-window" bodyClassName="board-body">
+    <Window
+      z={z}
+      title={`📋 ${t('board')}`}
+      onClose={onClose}
+      className={`board-window ${docked ? 'docked' : ''}`}
+      bodyClassName="board-body"
+      variant={docked ? 'drawer' : 'modal'}
+      actions={
+        <button className="btn dark sm" onClick={() => setDocked(!docked)} title={docked ? t('boardExpand') : t('boardDock')}>
+          {docked ? `⛶ ${t('boardExpand')}` : `⇥ ${t('boardDock')}`}
+        </button>
+      }
+    >
       <div className="board-toolbar">
         <button className="btn primary" onClick={() => openModal({ kind: 'taskEdit', preset: scope === 'shared' ? { scope: 'shared' } : undefined })}>＋ {t('newTask')}</button>
         <button className="btn warn" onClick={() => openModal({ kind: 'noteEdit', preset: scope === 'shared' ? { scope: 'shared' } : undefined })}>📝 {t('newNote')}</button>
@@ -98,12 +129,45 @@ export function BoardModal({ z, onClose }: { z: number; onClose: () => void }) {
                   />
                 ))}
               </div>
+              {(col === 'backlog' || col === 'todo') && <QuickAdd column={col} scope={scope === 'shared' ? 'shared' : 'personal'} />}
             </div>
           );
         })}
         <NotesColumn notes={visibleNotes} tasks={tasks} />
       </div>
     </Window>
+  );
+}
+
+/** Type a title + Enter at the bottom of a column to add a card there (assign agents later). */
+function QuickAdd({ column, scope }: { column: ColumnId; scope: Scope }) {
+  const t = useT();
+  const [title, setTitle] = useState('');
+  const [busy, setBusy] = useState(false);
+  const add = async () => {
+    if (!title.trim() || busy) return;
+    setBusy(true);
+    try {
+      await useStore.getState().addTask({ title: title.trim(), column, scope });
+      setTitle('');
+    } catch {
+      /* shown by api() */
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="quick-add">
+      <input
+        className="input"
+        placeholder={`＋ ${t('quickAdd')}`}
+        value={title}
+        maxLength={120}
+        onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && void add()}
+        aria-label={t('quickAdd')}
+      />
+    </div>
   );
 }
 

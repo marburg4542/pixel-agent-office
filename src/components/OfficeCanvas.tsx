@@ -24,9 +24,13 @@ export function OfficeCanvas() {
       const cs = getComputedStyle(wrap);
       const w = wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 12;
       const h = wrap.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - 12;
-      const s = Math.max(1, Math.floor(Math.min((w * dpr) / SCENE_W, (h * dpr) / SCENE_H)));
-      canvas.width = SCENE_W * s;
-      canvas.height = SCENE_H * s;
+      const best = Math.min((w * dpr) / SCENE_W, (h * dpr) / SCENE_H);
+      // Whole-number scales keep pixels perfectly crisp; on small screens where that would waste
+      // lots of space, fill the space instead (pixels become a hair uneven, which is hard to see).
+      let s = Math.max(1, Math.floor(best));
+      if (s < best * 0.8) s = Math.max(0.5, best);
+      canvas.width = Math.round(SCENE_W * s);
+      canvas.height = Math.round(SCENE_H * s);
       canvas.style.width = `${(SCENE_W * s) / dpr}px`;
       canvas.style.height = `${(SCENE_H * s) / dpr}px`;
       scaleRef.current = s;
@@ -73,6 +77,7 @@ export function OfficeCanvas() {
     const target = hitTest(locate(e), useStore.getState());
     if (!target) return;
     if (target.kind === 'board') openModal({ kind: 'board' });
+    else if (target.kind === 'note') openModal({ kind: 'noteEdit', noteId: target.id });
     else if (target.kind === 'agent') openModal({ kind: 'agent', agentId: target.id });
     else openModal({ kind: 'agentEdit', desk: target.index });
   };
@@ -97,11 +102,24 @@ export function OfficeCanvas() {
 function Tooltip({ target, x, y }: { target: HoverTarget; x: number; y: number }) {
   const t = useT();
   const agents = useStore((s) => s.agents);
+  const teamAgents = useStore((s) => s.teamAgents);
   const tasks = useStore((s) => s.tasks);
+  const notes = useStore((s) => s.notes);
   useTicker(300, target.kind === 'agent');
 
   let body: React.ReactNode;
   if (target.kind === 'board') body = <div>📋 {t('openBoard')}</div>;
+  else if (target.kind === 'note') {
+    const n = notes.find((x) => x.id === target.id);
+    if (!n) return null;
+    const to = n.to === 'all' ? t('everyone') : [...agents, ...teamAgents].find((a) => a.id === n.to)?.name ?? '?';
+    body = (
+      <>
+        <div className="tt-sub">📝 → {to}</div>
+        <div className="tt-note">{n.text}</div>
+      </>
+    );
+  }
   else if (target.kind === 'desk') body = <div>🪑 {t('clickToHire')}</div>;
   else {
     const a = agents.find((x) => x.id === target.id);

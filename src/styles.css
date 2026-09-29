@@ -105,6 +105,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .tooltip .tt-title { font-weight: 700; font-size: 14px; }
 .tooltip .tt-sub { color: var(--muted-dark); font-size: 12px; }
+.tooltip .tt-note { white-space: pre-wrap; max-width: 240px; margin-top: 2px; }
 
 /* ─── Controls ─────────────────────────────────────────── */
 
@@ -331,6 +332,61 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .mlib-provider td { background: var(--panel-2); color: var(--text-light); font-weight: 700; }
 .num-in { width: 64px !important; }
 
+/* ─── Docked board drawer ─────────────────────────────── */
+
+:root { --drawer-w: min(900px, 58vw); }
+.overlay.drawer { background: transparent; pointer-events: none; justify-content: flex-end; align-items: stretch; padding: 0; top: var(--topbar-h, 52px); }
+.overlay.drawer > .window {
+  pointer-events: auto; width: var(--drawer-w); height: 100%; max-height: none; box-shadow: -6px 0 0 rgba(10,6,14,.45);
+  border-right: none; border-bottom: none;
+}
+body.board-docked .stage { margin-right: var(--drawer-w); }
+body.board-docked .sidebar { display: none; }
+.board-window.docked .board-main { grid-template-columns: repeat(5, minmax(150px, 1fr)) 200px; }
+.board-window.docked .card-title { font-size: 13px; }
+.quick-add { display: flex; gap: 4px; padding: 0 8px 8px; }
+.quick-add .input { padding: 3px 6px; font-size: 13px; }
+
+.agent-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.agent-chip {
+  display: inline-flex; align-items: center; gap: 4px; border: 2px solid var(--ink); background: var(--paper-2); padding: 2px 8px 2px 2px;
+  cursor: pointer; font: inherit; font-size: 13px;
+}
+.agent-chip:hover { background: var(--accent); }
+.agent-chip img { border: 1px solid var(--ink); background: var(--paper-3); }
+
+/* ─── Markdown results ────────────────────────────────── */
+
+.md { font-family: 'Chakra Petch', var(--font); font-size: 14px; line-height: 1.55; }
+.md-p { margin: 0 0 8px; }
+.md-h { margin: 10px 0 6px; font-family: var(--font); }
+h3.md-h { font-size: 17px; }
+h4.md-h { font-size: 15px; }
+.md-list { margin: 0 0 8px; padding-left: 22px; }
+.md code { background: #efe6d2; border: 1px solid var(--paper-3); padding: 0 4px; font-size: 13px; }
+.md-code { background: #2a2438; color: #f4ecd8; border: 2px solid var(--ink); padding: 8px 10px; overflow-x: auto; margin: 0 0 8px; font-size: 12.5px; }
+.md-code code { background: none; border: none; padding: 0; color: inherit; }
+.md a { color: var(--blue); }
+.md-table-wrap { overflow-x: auto; margin: 0 0 8px; }
+.md-table { border-collapse: collapse; font-size: 13px; }
+.md-table th, .md-table td { border: 1px solid var(--paper-3); padding: 3px 8px; text-align: left; }
+.md-table th { background: var(--paper-2); }
+.stage-out-foot { margin-top: 6px; }
+
+/* ─── Help / tour ─────────────────────────────────────── */
+
+.tour-step { display: grid; grid-template-columns: 140px 1fr; gap: 18px; align-items: center; min-height: 190px; }
+.tour-art { display: grid; place-items: center; font-size: 64px; background: #efe0c0; border: 3px solid var(--ink); height: 150px; }
+.tour-dots { display: flex; gap: 6px; justify-content: center; margin-top: 12px; }
+.tour-dots i { width: 10px; height: 10px; border: 2px solid var(--ink); background: var(--paper-3); }
+.tour-dots i.on { background: var(--accent); }
+.kbd-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; align-items: center; font-size: 14px; }
+kbd { border: 2px solid var(--ink); border-bottom-width: 3px; background: #fffdf6; padding: 0 6px; font-family: var(--font); font-size: 13px; min-width: 22px; display: inline-block; text-align: center; }
+
+/* ─── Small screens ───────────────────────────────────── */
+
+.sidebar-toggle { display: none; }
+
 /* ─── Sign-in pages ───────────────────────────────────── */
 
 .auth-page { min-height: 100%; display: grid; place-items: center; padding: 24px 16px; position: relative; overflow: hidden; }
@@ -406,6 +462,13 @@ input[type='range'] { accent-color: var(--blue); width: 180px; }
 
 @media (max-width: 1100px) {
   .sidebar { display: none; }
+  .sidebar-toggle { display: inline-flex; }
+  body.show-sidebar .sidebar {
+    display: flex; position: fixed; right: 0; top: var(--topbar-h, 52px); bottom: 0; z-index: 15; width: min(300px, 90vw);
+    padding: 12px; background: #1b1726; border-left: 3px solid var(--ink);
+  }
+  :root { --drawer-w: 100vw; }
+  body.board-docked .stage { margin-right: 0; }
   .creator { grid-template-columns: 1fr; }
 }
 @media (max-width: 720px) {

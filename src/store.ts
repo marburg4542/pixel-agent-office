@@ -6,9 +6,10 @@ import type {
 } from './types';
 import { DEFAULT_SETTINGS } from '../shared/constants';
 import { translate } from '../shared/i18n';
-import { api } from './lib/api';
+import { API_BASE, api } from './lib/api';
 import { session } from './lib/session';
 import { configureSound } from './lib/sound';
+import { toast } from './lib/toast';
 
 export { MAX_DESKS } from '../shared/constants';
 
@@ -86,6 +87,45 @@ const empty = (): Data => ({
   clockOffset: 0,
   loaded: false,
 });
+
+// ─── Deletes with undo ───────────────────────────────────────────────────────
+// Deleting hides the item right away and shows an "Undo" toast; the server call happens a few
+// seconds later (or immediately if the page is closed).
+const UNDO_MS = 6500; // a little longer than the toast (6 s) so "Undo" is never too late
+const pendingDeletes = new Map<string, { timer: ReturnType<typeof setTimeout>; run: () => void }>();
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => {
+    for (const [, p] of pendingDeletes) {
+      clearTimeout(p.timer);
+      p.run();
+    }
+    pendingDeletes.clear();
+  });
+}
+
+function deleteWithUndo(opts: { id: string; path: string; label: string; hide: () => void; restore: () => void }) {
+  opts.hide();
+  const run = () => {
+    const token = session.token();
+    // keepalive lets the request finish even while the page is unloading.
+    void fetch(`${API_BASE}/api${opts.path}`, { method: 'DELETE', keepalive: true, headers: token ? { Authorization: `Bearer ${token}`, 'X-Lang': session.lang() } : {} })
+      .then((r) => {
+        if (!r.ok) opts.restore();
+      })
+      .catch(() => opts.restore());
+  };
+  const timer = setTimeout(() => {
+    pendingDeletes.delete(opts.id);
+    run();
+  }, UNDO_MS);
+  pendingDeletes.set(opts.id, { timer, run });
+  toast.withAction(opts.label, translate(session.lang(), 'undo'), () => {
+    clearTimeout(timer);
+    pendingDeletes.delete(opts.id);
+    opts.restore();
+  });
+}
 
 const upsert = <T extends { id: string }>(list: T[], item: T): T[] => {
   const i = list.findIndex((x) => x.id === item.id);
@@ -166,8 +206,15 @@ export const useStore = create<State>()((set, get) => {
       return task;
     },
     deleteTask: async (id) => {
-      await api(`/tasks/${id}`, { method: 'DELETE' });
-      set((s) => ({ tasks: without(s.tasks, id) }));
+      const task = get().tasks.find((t) => t.id === id);
+      if (!task) return;
+      deleteWithUndo({
+        id,
+        path: `/tasks/${id}`,
+        label: translate(get().settings.lang, 'deletedTask', { title: task.title }),
+        hide: () => set((s) => ({ tasks: without(s.tasks, id) })),
+        restore: () => set((s) => ({ tasks: upsert(s.tasks, task) })),
+      });
     },
     moveTask: async (id, column) => {
       const before = get().tasks.find((t) => t.id === id);
@@ -204,8 +251,15 @@ export const useStore = create<State>()((set, get) => {
       return note;
     },
     deleteNote: async (id) => {
-      await api(`/notes/${id}`, { method: 'DELETE' });
-      set((s) => ({ notes: without(s.notes, id) }));
+      const note = get().notes.find((n) => n.id === id);
+      if (!note) return;
+      deleteWithUndo({
+        id,
+        path: `/notes/${id}`,
+        label: translate(get().settings.lang, 'deletedNote'),
+        hide: () => set((s) => ({ notes: without(s.notes, id) })),
+        restore: () => set((s) => ({ notes: upsert(s.notes, note) })),
+      });
     },
 
     addModel: async (m) => set({ models: await api<ModelDef[]>('/models', { method: 'POST', body: m }) }),
@@ -215,6 +269,8 @@ export const useStore = create<State>()((set, get) => {
 
     applyEvent: (name, data) => {
       const s = get();
+      // Don't let live updates resurrect something waiting to be deleted.
+      if ((name === 'task' || name === 'note') && pendingDeletes.has((data as { id: string }).id)) return;
       switch (name) {
         case 'task':
           set({ tasks: upsert(s.tasks, data as Task) });
