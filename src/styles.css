@@ -604,3 +604,31 @@ input[type='range'] { accent-color: var(--blue); width: 180px; }
   .nr-layout { grid-template-columns: 1fr; }
   .nr-list { position: static; }
 }
+
+/* ─── Collaboration: questions & arena ─────────────────────────────────── */
+.question-box { border: 2px solid var(--orange); background: #fff7e0; padding: 10px; margin-top: 10px; display: grid; gap: 6px; }
+.question-text { margin: 0; font-family: 'Chakra Petch', var(--font); font-size: 14px; white-space: pre-wrap; }
+.question-box .textarea { min-height: 60px; }
+.qa-history { border: 2px solid var(--paper-3); background: #fffdf6; margin-top: 10px; }
+.qa-history summary { cursor: pointer; padding: 6px 10px; font-weight: 700; }
+.qa-history ul { margin: 0; padding: 0 12px 8px 28px; display: grid; gap: 6px; font-family: 'Chakra Petch', var(--font); font-size: 13px; }
+.card.asking { border-color: var(--orange); box-shadow: 3px 3px 0 var(--orange); }
+.arena-setup, .arena { border-top: 2px dashed var(--paper-3); padding: 10px; background: #fbf7ff; display: grid; gap: 8px; }
+.arena-models { display: flex; flex-wrap: wrap; gap: 6px; }
+.arena-model { display: inline-flex; align-items: center; gap: 6px; border: 2px solid var(--paper-3); background: #fff; padding: 4px 8px; cursor: pointer; font-size: 13px; }
+.arena-model.on { border-color: var(--purple); background: #f1e8ff; }
+.arena-head { gap: 8px; }
+.arena-grid { display: grid; gap: 8px; }
+.arena-card { border: 2px solid var(--paper-3); background: #fff; padding: 8px; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.arena-card.won { border-color: #d4a017; box-shadow: 3px 3px 0 #d4a017; }
+.arena-card header { font-size: 13px; }
+.arena-meta { font-size: 11.5px; }
+.arena-text { max-height: 320px; overflow: auto; font-family: 'Chakra Petch', var(--font); font-size: 13px; white-space: pre-wrap; }
+@media (max-width: 760px) { .arena-grid { grid-template-columns: 1fr !important; } }
+
+/* ─── Stats ────────────────────────────────────────────────────────────── */
+.stats { display: grid; gap: 10px; font-family: 'Chakra Petch', system-ui, sans-serif; }
+.stats-h { margin: 8px 0 0; font-size: 15px; }
+.stats-agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.stats-agent-nums { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12.5px; color: var(--viz-ink-2); }
+.link-btn { background: none; border: 0; padding: 0; color: #2c5fb8; text-decoration: underline; cursor: pointer; font: inherit; text-align: left; }

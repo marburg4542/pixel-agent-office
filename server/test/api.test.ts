@@ -30,6 +30,8 @@ before(async () => {
   users.seedAdminIfNeeded();
   store.loadAll();
   (await import('../workspace/newsroom')).loadNewsroom();
+  // Simulated agents don't ask questions or send work back at random in tests.
+  Object.assign((await import('../sim/collab')).simRates, { ask: 0, revise: 0 });
   // Research sources never touch the network in tests.
   const { CONNECTORS } = await import('../research/connectors');
   const day = 24 * 3600 * 1000;
@@ -455,6 +457,121 @@ test('watchlist schedules', async () => {
   assert.equal(weekly.getDay(), 1);
   assert.equal(weekly.getDate(), 5);
   assert.equal(nextRun({ every: '6h' }, now - 3600 * 1000, now), now + 5 * 3600 * 1000);
+});
+
+/** Swap every AI adapter for one function while `fn` runs, with real AI switched on. */
+async function withFakeAi(reply: (req: import('../ai/types').RunRequest, call: number) => string, fn: () => Promise<void>) {
+  const ai = await import('../ai');
+  const original = { ...ai.ADAPTERS };
+  let calls = 0;
+  const fake = {
+    async run(_k: Record<string, string>, req: import('../ai/types').RunRequest) {
+      const text = reply(req, calls++);
+      req.onText(text);
+      return { text, tokensIn: 100, tokensOut: 50, truncated: false };
+    },
+    async test() {},
+  };
+  for (const id of Object.keys(ai.ADAPTERS) as (keyof typeof ai.ADAPTERS)[]) ai.ADAPTERS[id] = fake;
+  await call('/settings', { method: 'PUT', token: adminToken, body: { aiMode: 'auto' } });
+  try {
+    await fn();
+  } finally {
+    Object.assign(ai.ADAPTERS, original);
+    await call('/settings', { method: 'PUT', token: adminToken, body: { aiMode: 'sim' } });
+  }
+}
+
+test('an agent can stop to ask a question, and the answer reaches its prompt', async () => {
+  const prompts: string[] = [];
+  await withFakeAi(
+    (req) => {
+      prompts.push(req.user);
+      return req.user.includes('You asked:') ? '# The plan\nFor teenagers, short.' : 'QUESTION: Who is the audience?';
+    },
+    async () => {
+      const ws = (await call('/workspace', { token: adminToken })).data;
+      const created = await call('/tasks', { method: 'POST', token: adminToken, body: { title: 'Vague brief', pipeline: [ws.agents[0].id], size: 'S', priority: 'high' } });
+      const asked = await waitForTask(adminToken, created.data.id, (x) => !!x.question);
+      assert.equal(asked.question.text, 'Who is the audience?');
+      assert.equal(asked.active, false);
+      for (let i = 0; i < 20; i++) worker.tick(1);
+      assert.equal((await call('/workspace', { token: adminToken })).data.tasks.find((x: { id: string }) => x.id === created.data.id).outputs.length, 0, 'waits for the answer');
+
+      assert.equal((await call(`/tasks/${created.data.id}/answer`, { method: 'POST', token: adminToken, body: { text: ' ' } })).status, 400);
+      const answered = await call(`/tasks/${created.data.id}/answer`, { method: 'POST', token: adminToken, body: { text: 'Teenagers' } });
+      assert.equal(answered.data.question, undefined);
+      assert.equal(answered.data.qa[0].answer, 'Teenagers');
+      const done = await waitForTask(adminToken, created.data.id, (x) => x.column === 'review');
+      assert.match(done.outputs[0].text, /For teenagers/);
+      assert.ok(prompts.some((p) => p.includes('You asked: Who is the audience?') && p.includes('Teenagers')));
+    },
+  );
+});
+
+test('a reviewer agent sends work back by itself at most twice', async () => {
+  await withFakeAi(
+    (req) => (req.system.includes('VERDICT: REVISE step') ? 'Too thin.\nVERDICT: REVISE step 1 — add examples' : req.system.includes('VERDICT: APPROVE') ? 'Fine now.\nVERDICT: APPROVE' : '# Draft'),
+    async () => {
+      const ws = (await call('/workspace', { token: adminToken })).data;
+      const writer = ws.agents.find((a: { role: string }) => a.role !== 'reviewer');
+      const reviewer = ws.agents.find((a: { role: string }) => a.role === 'reviewer');
+      const created = await call('/tasks', { method: 'POST', token: adminToken, body: { title: 'Reviewed', description: 'A long enough description for the brief.', pipeline: [writer.id, reviewer.id], size: 'S', priority: 'high' } });
+      const t = await waitForTask(adminToken, created.data.id, (x) => x.column === 'review');
+      assert.equal(t.autoRevisions, 2);
+      assert.equal(t.log.filter((l: { key: string }) => l.key === 'log_autoRevise').length, 2);
+      assert.equal(t.outputs.filter((o: { agentId: string }) => o.agentId === writer.id).length, 3, 'the writer redid its step twice');
+      assert.match(t.outputs[t.outputs.length - 1].text, /VERDICT: APPROVE/);
+      const notes = (await call('/workspace', { token: adminToken })).data.notes.filter((n: { taskId?: string }) => n.taskId === created.data.id);
+      assert.equal(notes.length, 2);
+      assert.match(notes[0].text, /add examples/);
+    },
+  );
+});
+
+test('model arena: run a step on several models, pick a winner, keep score', async () => {
+  const ws = (await call('/workspace', { token: adminToken })).data;
+  const done = ws.tasks.find((x: { ownerId: number; outputs: unknown[] }) => x.ownerId === ws.user.id && x.outputs.length);
+  const [m1, m2, m3] = ws.models;
+  assert.equal((await call(`/tasks/${done.id}/arena`, { method: 'POST', token: adminToken, body: { stage: 0, modelIds: [m1.id] } })).status, 400, 'needs 2+ models');
+  const started = await call(`/tasks/${done.id}/arena`, { method: 'POST', token: adminToken, body: { stage: 0, modelIds: [m1.id, m2.id, m3.id], blind: true } });
+  assert.equal(started.status, 200, JSON.stringify(started.json));
+  assert.equal(started.data.arena.entries.length, 3);
+  assert.ok(started.data.arena.entries.every((e: { status: string }) => e.status === 'running'));
+  assert.equal((await call(`/tasks/${done.id}/arena/pick`, { method: 'POST', token: bobToken, body: { modelId: m1.id } })).status, 404, "others can't even see a personal task");
+
+  let arena;
+  for (let i = 0; i < 100; i++) {
+    arena = (await call('/workspace', { token: adminToken })).data.tasks.find((x: { id: string }) => x.id === done.id).arena;
+    if (arena.entries.every((e: { status: string }) => e.status !== 'running')) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.ok(arena.entries.every((e: { status: string; simulated: boolean }) => e.status === 'done' && e.simulated), 'AI is off, so answers are simulated');
+  const picked = await call(`/tasks/${done.id}/arena/pick`, { method: 'POST', token: adminToken, body: { modelId: m2.id, use: true } });
+  assert.equal(picked.data.arena.pickedModelId, m2.id);
+  const latest = [...picked.data.outputs].reverse().find((o: { stage: number }) => o.stage === 0);
+  assert.equal(latest.modelId, m2.id);
+  assert.equal(latest.arena, true);
+
+  const stats = (await call('/stats', { token: adminToken })).data;
+  const row = stats.arena.mine.find((r: { modelName: string }) => r.modelName === m2.name);
+  assert.deepEqual([row.wins, row.games], [1, 1]);
+  assert.equal(stats.arena.mine.find((r: { modelName: string }) => r.modelName === m1.name).wins, 0);
+  assert.equal((await call(`/tasks/${done.id}/arena`, { method: 'DELETE', token: adminToken })).data.arena, undefined);
+});
+
+test('stats cover agents, models, spending and the team', async () => {
+  const stats = (await call('/stats', { token: adminToken })).data;
+  assert.equal(stats.costDaily.length, 30);
+  assert.ok(stats.totals.steps > 0);
+  assert.ok(stats.totals.costUsd >= 0);
+  const mine = stats.agents.filter((a: { mine: boolean }) => a.mine);
+  assert.ok(mine.length >= 1 && mine.every((a: { costUsd: number | null }) => a.costUsd !== null));
+  assert.ok(stats.agents.some((a: { sentBack: number }) => a.sentBack >= 2), 'auto send-backs are counted');
+  assert.ok(stats.models.length > 0);
+  assert.equal(typeof stats.team.columns.todo, 'number');
+  const bobStats = (await call('/stats', { token: bobToken })).data;
+  assert.ok(bobStats.agents.filter((a: { mine: boolean }) => !a.mine).every((a: { costUsd: number | null }) => a.costUsd === null), "teammates' spending stays private");
 });
 
 test('changing email needs the current password', async () => {

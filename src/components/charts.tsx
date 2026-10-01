@@ -1,7 +1,7 @@
 // Small SVG charts for research reports and the Newsroom. Colors come from the --viz-* tokens in
 // styles.css (validated against the card surface): a blue↔red diverging pair with a gray neutral for
 // sentiment, categorical slots 1–2 for series. Every chart has a hover/focus tooltip and a table view.
-import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { useT } from '../store';
 import type { Point, SentimentSplit } from '../types';
 
@@ -12,6 +12,22 @@ export const compact = (n: number): string =>
 export const signed = (n: number, digits = 2) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toFixed(digits)}`;
 export const price = (n?: number) => (n === undefined ? '–' : `$${n.toLocaleString('en-US', { maximumFractionDigits: n < 1 ? 6 : n < 100 ? 2 : 0 })}`);
 export const shortDate = (t: number, lang: 'th' | 'en') => new Date(t).toLocaleDateString(lang === 'th' ? 'th-TH' : 'en-GB', { day: 'numeric', month: 'short' });
+
+/** Draw at the container's real width so text and marks keep their pixel sizes at any window size. */
+function useWidth(fallback = 520): [RefObject<HTMLDivElement | null>, number] {
+  const ref = useRef<HTMLDivElement>(null);
+  const [w, setW] = useState(fallback);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setW(Math.max(280, Math.round(el.clientWidth)));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w];
+}
 
 // ─── Card with a table-view twin ─────────────────────────────────────────────
 
@@ -99,7 +115,7 @@ const GAP = 2;
 export function DivergingBars({ rows, labelWidth = 110 }: { rows: { label: string; note?: string; split: SentimentSplit }[]; labelWidth?: number }) {
   const t = useT();
   const [tip, setTip] = useState<{ x: number; y: number; value: string; label: string } | null>(null);
-  const W = 520;
+  const [wrapRef, W] = useWidth();
   const ROW = 30;
   const BAR = 18;
   const plotW = W - labelWidth - 8;
@@ -111,7 +127,7 @@ export function DivergingBars({ rows, labelWidth = 110 }: { rows: { label: strin
   const names = { negative: t('sent_negative'), neutral: t('sent_neutral'), positive: t('sent_positive') };
 
   return (
-    <div className="viz-wrap">
+    <div className="viz-wrap" ref={wrapRef}>
       <svg viewBox={`0 0 ${W} ${H}`} className="viz-svg" role="img" aria-label={rows.map((r) => `${r.label}: ${r.split.positive}% / ${r.split.neutral}% / ${r.split.negative}%`).join('; ')}>
         <line x1={cx} x2={cx} y1={0} y2={H} className="viz-axis" />
         {rows.map((r, i) => {
@@ -204,8 +220,8 @@ export function LineChart({
   const [hover, setHover] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const clip = useId();
+  const [wrapRef, W] = useWidth();
   if (points.length < 2) return <div className="viz-empty">–</div>;
-  const W = 520;
   const H = height;
   const pad = { l: 46, r: 56, t: 10, b: 22 };
   const xs = points.map((p) => p.t);
@@ -249,7 +265,7 @@ export function LineChart({
   };
 
   return (
-    <div className="viz-wrap">
+    <div className="viz-wrap" ref={wrapRef}>
       <svg
         ref={svgRef} viewBox={`0 0 ${W} ${H}`} className="viz-svg" role="img" aria-label={ariaLabel} tabIndex={0}
         onPointerMove={(e) => setHover(nearest(e.clientX))} onPointerLeave={() => setHover(null)} onKeyDown={onKey} onBlur={() => setHover(null)}
@@ -292,15 +308,16 @@ export function LineChart({
 // ─── Stacked columns (e.g. mentions per day: news + social) ──────────────────
 
 export function StackedColumns({
-  data, series, dateLabel, ariaLabel,
+  data, series, dateLabel, ariaLabel, format = compact,
 }: {
   data: { t: number; values: number[] }[];
   series: { label: string; color: string }[];
   dateLabel: (t: number) => string;
   ariaLabel: string;
+  format?: (v: number) => string;
 }) {
   const [tip, setTip] = useState<{ x: number; y: number; value: string; label: string } | null>(null);
-  const W = 520;
+  const [wrapRef, W] = useWidth();
   const H = 140;
   const pad = { l: 34, r: 8, t: 10, b: 22 };
   const max = Math.max(1, ...data.map((d) => d.values.reduce((s, v) => s + v, 0)));
@@ -310,12 +327,12 @@ export function StackedColumns({
   const y = (v: number) => pad.t + (1 - v / nice) * (H - pad.t - pad.b);
   const labelEvery = Math.ceil(data.length / 7);
   return (
-    <div className="viz-wrap">
+    <div className="viz-wrap" ref={wrapRef}>
       <svg viewBox={`0 0 ${W} ${H}`} className="viz-svg" role="img" aria-label={ariaLabel}>
         {[0, nice / 2, nice].map((v) => (
           <g key={v}>
             <line x1={pad.l} x2={W - pad.r} y1={y(v)} y2={y(v)} className={v === 0 ? 'viz-axis' : 'viz-grid'} />
-            <text x={pad.l - 6} y={y(v)} className="viz-tick" textAnchor="end" dominantBaseline="central">{compact(v)}</text>
+            <text x={pad.l - 6} y={y(v)} className="viz-tick" textAnchor="end" dominantBaseline="central">{format(v)}</text>
           </g>
         ))}
         {data.map((d, i) => {
@@ -336,15 +353,15 @@ export function StackedColumns({
               {i % labelEvery === 0 && <text x={cx} y={H - 6} className="viz-tick" textAnchor="middle">{dateLabel(d.t)}</text>}
               <rect
                 x={cx - band / 2} y={pad.t} width={band} height={H - pad.t - pad.b} fill="transparent" tabIndex={0}
-                aria-label={`${dateLabel(d.t)}: ${series.map((s, k) => `${s.label} ${d.values[k]}`).join(', ')}`}
+                aria-label={`${dateLabel(d.t)}: ${series.map((s, k) => `${s.label} ${format(d.values[k])}`).join(', ')}`}
                 onPointerMove={(e) => {
                   const box = (e.currentTarget.closest('.viz-wrap') as HTMLElement).getBoundingClientRect();
-                  setTip({ x: e.clientX - box.left, y: e.clientY - box.top, value: String(total), label: `${dateLabel(d.t)} · ${series.map((s, k) => `${s.label} ${d.values[k]}`).join(' · ')}` });
+                  setTip({ x: e.clientX - box.left, y: e.clientY - box.top, value: format(total), label: `${dateLabel(d.t)} · ${series.map((s, k) => `${s.label} ${format(d.values[k])}`).join(' · ')}` });
                 }}
                 onFocus={(e) => {
                   const box = (e.currentTarget.closest('.viz-wrap') as HTMLElement).getBoundingClientRect();
                   const rb = e.currentTarget.getBoundingClientRect();
-                  setTip({ x: rb.left + rb.width / 2 - box.left, y: rb.top - box.top + 10, value: String(total), label: `${dateLabel(d.t)} · ${series.map((s, k) => `${s.label} ${d.values[k]}`).join(' · ')}` });
+                  setTip({ x: rb.left + rb.width / 2 - box.left, y: rb.top - box.top + 10, value: format(total), label: `${dateLabel(d.t)} · ${series.map((s, k) => `${s.label} ${format(d.values[k])}`).join(' · ')}` });
                 }}
                 onPointerLeave={() => setTip(null)}
                 onBlur={() => setTip(null)}
@@ -378,6 +395,53 @@ function niceMax(v: number): number {
 function columnPath(x: number, y: number, w: number, h: number, r: number): string {
   r = Math.min(r, w / 2, h);
   return `M${x},${y + h} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h} Z`;
+}
+
+// ─── Horizontal bars (one series, e.g. steps per agent) ─────────────────────
+
+export function HBars({ rows, format = (v) => compact(v), ariaLabel }: { rows: { label: string; value: number; note?: string }[]; format?: (v: number) => string; ariaLabel: string }) {
+  const [tip, setTip] = useState<{ x: number; y: number; value: string; label: string } | null>(null);
+  const [wrapRef, W] = useWidth();
+  const ROW = 26;
+  const BAR = 14;
+  const labelW = 130;
+  const valueW = 56;
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  const scale = (W - labelW - valueW - 12) / max;
+  const H = rows.length * ROW + 4;
+  return (
+    <div className="viz-wrap" ref={wrapRef}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="viz-svg" role="img" aria-label={`${ariaLabel}: ${rows.map((r) => `${r.label} ${format(r.value)}`).join(', ')}`}>
+        <line x1={labelW + 8} x2={labelW + 8} y1={0} y2={H} className="viz-axis" />
+        {rows.map((r, i) => {
+          const y = i * ROW + (ROW - BAR) / 2 + 2;
+          const w = Math.max(r.value > 0 ? 2 : 0, r.value * scale);
+          const show = (e: { clientX: number; clientY: number; currentTarget: Element }) => {
+            const box = (e.currentTarget.closest('.viz-wrap') as HTMLElement).getBoundingClientRect();
+            setTip({ x: e.clientX - box.left, y: e.clientY - box.top, value: format(r.value), label: r.note ? `${r.label} · ${r.note}` : r.label });
+          };
+          return (
+            <g key={`${r.label}-${i}`}>
+              <text x={labelW} y={y + BAR / 2} className="viz-label" textAnchor="end" dominantBaseline="central">{r.label}</text>
+              {w > 0 && <path d={roundedBar(labelW + 8, y, w, BAR, 0, 4)} fill="var(--viz-s1)" />}
+              <text x={labelW + 8 + w + 6} y={y + BAR / 2} className="viz-label" dominantBaseline="central">{format(r.value)}</text>
+              <rect
+                x={labelW + 8} y={y - 5} width={W - labelW - 8} height={BAR + 10} fill="transparent" tabIndex={0} aria-label={`${r.label}: ${format(r.value)}`}
+                onPointerMove={show}
+                onPointerLeave={() => setTip(null)}
+                onFocus={(e) => {
+                  const rb = e.currentTarget.getBoundingClientRect();
+                  show({ clientX: rb.left + 40, clientY: rb.top, currentTarget: e.currentTarget });
+                }}
+                onBlur={() => setTip(null)}
+              />
+            </g>
+          );
+        })}
+      </svg>
+      <Tip tip={tip} />
+    </div>
+  );
 }
 
 // ─── Stat tile & sparkline ───────────────────────────────────────────────────

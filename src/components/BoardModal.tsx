@@ -214,7 +214,10 @@ function TaskCard(props: {
     warn = true;
   } else if (task.column === 'done') status = `✅ ${t('col_done')}`;
   else if (task.column === 'review') status = `🔍 ${t('colHint_review')}`;
-  else if (task.blocked && (task.column === 'todo' || task.column === 'doing')) {
+  else if (task.question) {
+    status = `❓ ${t('qa_waiting', { agent: task.question.agentName })}`;
+    warn = true;
+  } else if (task.blocked && (task.column === 'todo' || task.column === 'doing')) {
     status = `⛔ ${t('blocked_short')}: ${t(`blocked_${['auth', 'quota', 'rate', 'network', 'refusal', 'model'].includes(task.blocked.kind) ? task.blocked.kind : 'other'}`)}`;
     warn = true;
   }
@@ -223,7 +226,7 @@ function TaskCard(props: {
 
   return (
     <div
-      className={`card ${props.dragging ? 'dragging' : ''} ${task.active ? 'active' : ''} ${task.scope === 'shared' ? 'shared' : ''} ${task.blocked ? 'blocked' : ''}`}
+      className={`card ${props.dragging ? 'dragging' : ''} ${task.active ? 'active' : ''} ${task.scope === 'shared' ? 'shared' : ''} ${task.blocked ? 'blocked' : ''} ${task.question ? 'asking' : ''}`}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData('text/plain', task.id);

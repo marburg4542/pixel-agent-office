@@ -74,6 +74,9 @@ export function loadAll(): void {
   for (const r of db.prepare('SELECT data FROM tasks').all() as { data: string }[]) {
     // Nobody is mid-step after a restart; the worker picks the work up again.
     const t = { ...(JSON.parse(r.data) as Task), active: false };
+    if (t.arena) {
+      t.arena = { ...t.arena, entries: t.arena.entries.map((e) => (e.status === 'running' ? { ...e, status: 'error' as const, error: 'interrupted by a server restart' } : e)) };
+    }
     tasks.set(t.id, t);
   }
   for (const r of db.prepare('SELECT data FROM notes').all() as { data: string }[]) {
@@ -388,6 +391,9 @@ export const getTask = (id: string): Task | undefined => tasks.get(id);
 
 const canSeeTask = (u: AuthUser, t: Task) => t.scope === 'shared' || t.ownerId === u.id;
 
+/** A task the user may see (404 otherwise) — for other server modules. */
+export const visibleTaskFor = (u: AuthUser, id: string): Task => visibleTask(u, id);
+
 function visibleTask(u: AuthUser, id: string): Task {
   const t = tasks.get(id);
   if (!t || !canSeeTask(u, t)) throw new ApiError(404, 'ไม่พบงาน', 'Task not found');
@@ -510,7 +516,9 @@ export function moveTask(u: AuthUser, id: string, column: ColumnId): Task {
 
 export function restartTask(u: AuthUser, id: string): Task {
   const t = visibleTask(u, id);
-  return commitTask(withLog({ ...t, stage: 0, stageProgress: 0, active: false, column: 'todo', doneAt: undefined, blocked: undefined }, 'log_restarted'));
+  return commitTask(
+    withLog({ ...t, stage: 0, stageProgress: 0, active: false, column: 'todo', doneAt: undefined, blocked: undefined, question: undefined, autoRevisions: 0 }, 'log_restarted'),
+  );
 }
 
 export function approveTask(u: AuthUser, id: string): Task {
@@ -531,7 +539,7 @@ export function requestChanges(u: AuthUser, id: string, agentId: string, text: s
   });
   const agent = agents.get(agentId);
   const next = commitTask(
-    withLog({ ...t, stage, stageProgress: 0, active: false, column: 'todo', doneAt: undefined, blocked: undefined }, 'log_changes', { agent: agent?.name ?? '?', text: body }),
+    withLog({ ...t, stage, stageProgress: 0, active: false, column: 'todo', doneAt: undefined, blocked: undefined, question: undefined }, 'log_changes', { agent: agent?.name ?? '?', agentId, text: body }),
   );
   pushFeed(taskFeedAudience(t), 'feed_changes', { task: t.title });
   return next;
@@ -547,7 +555,7 @@ const isBlocked = (t: Task, now = Date.now()) => !!t.blocked && !(t.blocked.unti
 export function queueFor(agentId: string): Task[] {
   const now = Date.now();
   return [...tasks.values()]
-    .filter((t) => (t.column === 'todo' || t.column === 'doing') && t.pipeline[t.stage] === agentId && !t.active && !isBlocked(t, now))
+    .filter((t) => (t.column === 'todo' || t.column === 'doing') && t.pipeline[t.stage] === agentId && !t.active && !t.question && !isBlocked(t, now))
     .sort(
       (a, b) =>
         (a.column === 'doing' ? 0 : 1) - (b.column === 'doing' ? 0 : 1) ||
@@ -573,6 +581,58 @@ export function clearBlocked(taskId: string): void {
 export function retryTask(u: AuthUser, id: string): Task {
   const t = visibleTask(u, id);
   return commitTask(withLog({ ...t, blocked: undefined }, 'log_retry'));
+}
+
+/** An agent needs an answer before it can do its step: park the task with the question. */
+export function askQuestion(taskId: string, agent: Agent, text: string): void {
+  const t = tasks.get(taskId);
+  if (!t) return;
+  const question = { agentId: agent.id, agentName: agent.name, stage: t.stage, text: text.slice(0, 600), at: Date.now() };
+  commitTask(withLog({ ...t, active: false, question }, 'log_asked', { agent: agent.name, text: question.text }));
+  pushFeed(taskFeedAudience(t), 'feed_asked', { agent: agent.name, task: t.title });
+}
+
+export function answerQuestion(u: AuthUser, id: string, text: unknown): Task {
+  const t = visibleTask(u, id);
+  if (!t.question) throw new ApiError(400, 'งานนี้ไม่มีคำถามค้างอยู่', 'There is no open question on this task');
+  const answer = String(text ?? '').trim().slice(0, 1000);
+  if (!answer) throw new ApiError(400, 'กรุณาพิมพ์คำตอบ', 'Please type an answer');
+  const q = t.question;
+  const qa = [...(t.qa ?? []), { stage: q.stage, agentName: q.agentName, question: q.text, answer, by: u.username, at: Date.now() }];
+  return commitTask(withLog({ ...t, question: undefined, qa }, 'log_answered', { user: u.username, text: answer }));
+}
+
+/** A reviewer agent sent the work back: keep its review, return the task to the step that must redo its part. */
+export function autoRevise(taskId: string, reviewer: Agent, output: StageOutput, targetStage: number, feedback: string): void {
+  const t = tasks.get(taskId);
+  if (!t) return;
+  const target = agents.get(t.pipeline[targetStage]);
+  const text = feedback || (translate(langOf(t.ownerId), 'autoReviseDefault'));
+  commitNote({
+    id: uid(), scope: t.scope, createdBy: reviewer.ownerId, createdByName: '', text: `🔍 ${reviewer.name}: ${text}`, to: t.pipeline[targetStage], taskId: t.id, color: 2, createdAt: Date.now(), readBy: [],
+  });
+  commitTask(
+    withLog(
+      { ...t, outputs: [...t.outputs, output], stage: targetStage, stageProgress: 0, active: false, column: 'todo', autoRevisions: (t.autoRevisions ?? 0) + 1 },
+      'log_autoRevise',
+      { agent: reviewer.name, target: target?.name ?? '?', agentId: target?.id ?? '', text },
+    ),
+  );
+  pushFeed(taskFeedAudience(t), 'feed_autoRevise', { agent: reviewer.name, target: target?.name ?? '?', task: t.title });
+}
+
+/** Save the Model Arena state of a task (the arena module does the checks). */
+export function setArena(taskId: string, arena: Task['arena']): Task | undefined {
+  const t = tasks.get(taskId);
+  if (!t) return undefined;
+  return commitTask({ ...t, arena });
+}
+
+/** Use an arena winner as the step's result. */
+export function addStageOutput(taskId: string, output: StageOutput, logKey: string, params: LogParams): Task | undefined {
+  const t = tasks.get(taskId);
+  if (!t) return undefined;
+  return commitTask(withLog({ ...t, outputs: [...t.outputs, output] }, logKey, params));
 }
 
 export function claimTask(taskId: string, agent: Agent): void {

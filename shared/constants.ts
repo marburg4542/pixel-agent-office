@@ -23,3 +23,6 @@ export const TRIP_SECONDS = 6;
 /** Portion of a trip spent walking there / reading at the board (the rest is walking back). */
 export const TRIP_ARRIVE = 0.4;
 export const TRIP_LEAVE = 0.6;
+
+/** Reviewer agents may send a task back by themselves this many times; after that a person decides. */
+export const MAX_AUTO_REVISIONS = 2;

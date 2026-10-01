@@ -6,6 +6,8 @@ import * as store from '../workspace/store';
 import * as worker from '../worker/engine';
 import * as newsroom from '../workspace/newsroom';
 import { CONNECTORS } from '../research/connectors';
+import * as arena from '../arena';
+import { statsFor } from '../stats';
 import { deleteKey, getKey, listKeys, setKey } from '../keys';
 import { testAiKey } from '../ai';
 import { usageSummary } from '../usage';
@@ -73,6 +75,10 @@ router.post(
     return store.retryTask(req.user!, String(req.params.id));
   }),
 );
+router.post('/tasks/:id/answer', h((req) => store.answerQuestion(req.user!, String(req.params.id), req.body?.text)));
+router.post('/tasks/:id/arena', h((req) => arena.startArena(req.user!, String(req.params.id), req.body ?? {})));
+router.post('/tasks/:id/arena/pick', h((req) => arena.pickWinner(req.user!, String(req.params.id), req.body ?? {})));
+router.delete('/tasks/:id/arena', h((req) => arena.closeArena(req.user!, String(req.params.id))));
 router.post('/tasks/:id/request-changes', h((req) => store.requestChanges(req.user!, String(req.params.id), String(req.body?.agentId), req.body?.text)));
 
 // Notes
@@ -96,6 +102,9 @@ router.delete('/watchlists/:id', h((req) => (newsroom.deleteWatchlist(req.user!,
 router.post('/watchlists/:id/run', h((req) => newsroom.runNow(req.user!, String(req.params.id))));
 router.get('/watchlists/:id/reports', h((req) => newsroom.reportsOf(req.user!, String(req.params.id))));
 router.get('/reports/:id', h((req) => newsroom.getReport(req.user!, String(req.params.id))));
+
+// Stats page
+router.get('/stats', h((req) => statsFor(req.user!.id)));
 
 // Spending on real AI calls this month
 router.get('/usage', h((req) => usageSummary(req.user!.id)));

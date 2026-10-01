@@ -15,6 +15,8 @@ import { estimate } from '../research/sentiment';
 import { packForPrompt, readAnalysis, researchInstructions, simulatedReport } from '../research/report';
 import * as newsroom from '../workspace/newsroom';
 import { normalizeQuery, type ResearchPack, type ResearchResult } from '../../shared/research';
+import { answeredFor, parseQuestion, parseVerdict, simQuestion } from '../sim/collab';
+import { MAX_AUTO_REVISIONS } from '../../shared/constants';
 import { TRIP_SECONDS } from '../../shared/constants';
 import type { Agent, AgentRuntime, LiveText, ModelDef, RuntimeStatus, StageOutput, Task } from '../../shared/types';
 
@@ -57,6 +59,10 @@ interface RT {
   job?: Job;
   /** Simulated research step: the report is ready, the animation just has to finish. */
   pending?: { text: string; research: ResearchResult };
+  /** When the current step began (stats). */
+  startedAt?: number;
+  /** Simulated step that will stop early to ask the manager this. */
+  simQuestion?: string;
 }
 
 const rts = new Map<string, RT>();
@@ -143,6 +149,8 @@ function startWork(rt: RT, a: Agent, t: Task) {
   const model = modelOf(a);
   const ai = decideAi(a.ownerId, model);
   store.setTaskActive(t.id, true);
+  rt.startedAt = Date.now();
+  rt.simQuestion = undefined;
   if (!ai.real && ai.reason === 'budget') store.pushLog(t.id, 'log_budgetSim', { agent: a.name });
   if (isResearchStep(t)) {
     startResearch(rt, a, t, model, ai.real ? ai.key : null);
@@ -153,6 +161,7 @@ function startWork(rt: RT, a: Agent, t: Task) {
     return;
   }
   Object.assign(rt, { status: 'working', taskId: t.id, progress: t.stageProgress, duration: stageDuration(t, model), phase: -1, noteT: 2, job: undefined, pending: undefined });
+  rt.simQuestion = simQuestion(t, store.langOf(a.ownerId)) ?? undefined;
   sync(rt, a);
 }
 
@@ -186,6 +195,11 @@ function simWork(rt: RT, a: Agent, dt: number) {
 
   rt.progress += (dt / rt.duration) * 100;
   advancePhase(rt, a, t);
+  if (rt.simQuestion && rt.progress >= 8) {
+    store.setTaskProgress(t.id, Math.floor(rt.progress));
+    ask(rt, a, t, rt.simQuestion);
+    return;
+  }
   if ((rt.noteT -= dt) <= 0) {
     rt.noteT = 2;
     readNotes(a);
@@ -296,7 +310,13 @@ function callModel(rt: RT, a: Agent, job: Job, key: KeyFields, prompt: { system:
       }
       autoRetries.delete(job.taskId);
       const cost = costOf(model, res.tokensIn, res.tokensOut);
-      addUsage(a.ownerId, model, res.tokensIn, res.tokensOut, cost);
+      addUsage(a.ownerId, model, res.tokensIn, res.tokensOut, cost, a.id);
+      const question = parseQuestion(res.text);
+      if (question && !answeredFor(cur, cur.stage).length) {
+        sendTo([a.ownerId], 'usage-changed', {});
+        ask(rt, a, cur, question);
+        return;
+      }
       const lang = store.langOf(a.ownerId);
       const cut = res.truncated ? `\n\n> ⚠️ ${lang === 'th' ? 'คำตอบถูกตัดเพราะยาวเกินขีดจำกัด' : 'The answer was cut off at the length limit.'}` : '';
       let text = res.text.trim() || '…';
@@ -360,7 +380,23 @@ function realWork(rt: RT, a: Agent) {
 }
 
 /** Shared ending for simulated and real steps: store the result, celebrate, hand off. */
+function ask(rt: RT, a: Agent, t: Task, question: string) {
+  rt.simQuestion = undefined;
+  store.askQuestion(t.id, a, question);
+  bubble(a, 'ask');
+  toIdle(rt, a);
+}
+
 function complete(rt: RT, a: Agent, t: Task, output: StageOutput) {
+  output.startedAt ??= rt.startedAt;
+  // A reviewer may send the work back by itself (a few rounds), instead of handing it on.
+  const verdict = a.role === 'reviewer' ? parseVerdict(output.text) : null;
+  if (verdict?.kind === 'revise' && verdict.stage >= 0 && verdict.stage < t.stage && (t.autoRevisions ?? 0) < MAX_AUTO_REVISIONS) {
+    store.autoRevise(t.id, a, output, verdict.stage, verdict.feedback);
+    bubble(a, 'revise');
+    toIdle(rt, a);
+    return;
+  }
   const res = store.completeStage(t.id, output);
   bubble(a, 'done');
   sendTo([a.ownerId], 'stage-done', { agentId: a.id });

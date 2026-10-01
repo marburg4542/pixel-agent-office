@@ -217,6 +217,7 @@ export interface BoardCard {
   priority: keyof typeof PRIORITY_COLORS;
   active: boolean;
   blocked: boolean;
+  asking: boolean;
 }
 
 export function drawBoard(
@@ -238,6 +239,7 @@ export function drawBoard(
       rect(ctx, x + 4, y + 2, 10, 1, '#c9bfa8');
       if (card.active && Math.floor(t * 3) % 2 === 0) rect(ctx, x + colW - 5, y + 1, 2, 2, '#f0a030');
       if (card.blocked) rect(ctx, x + colW - 5, y + 1, 2, 3, '#d8453e');
+      else if (card.asking && Math.floor(t * 2) % 2 === 0) rect(ctx, x + colW - 5, y + 1, 2, 3, '#f0a030');
     });
     if (col.cards.length > max) text(ctx, `+${col.cards.length - max}`, x + colW / 2, b.y + b.h - 4, { size: 4, color: '#5a3a24' });
   });

@@ -94,6 +94,10 @@ export interface StageOutput {
   costUsd?: number;
   /** News & sentiment data and the reading of it (analyst steps of research tasks). */
   research?: ResearchResult;
+  /** When the step began (for timing stats). */
+  startedAt?: number;
+  /** Chosen in the Model Arena. */
+  arena?: boolean;
 }
 
 export type LogParams = Record<string, string | number>;
@@ -134,6 +138,42 @@ export interface Task {
   research?: ResearchQuery;
   /** Set on the run task of a Newsroom watchlist. */
   watchlistId?: string;
+  /** An agent paused to ask something; agents skip the task until someone answers. */
+  question?: { agentId: string; agentName: string; stage: number; text: string; at: number };
+  /** Answered questions — each goes into the prompt of the step that asked. */
+  qa?: { stage: number; agentName: string; question: string; answer: string; by: string; at: number }[];
+  /** Times a reviewer agent sent the work back by itself (at most MAX_AUTO_REVISIONS). */
+  autoRevisions?: number;
+  /** Model Arena: one step re-run on several models side by side. */
+  arena?: Arena;
+}
+
+export interface ArenaEntry {
+  modelId: string;
+  modelName: string;
+  provider: ProviderId;
+  status: 'running' | 'done' | 'error';
+  text: string;
+  error?: string;
+  simulated: boolean;
+  tokensIn?: number;
+  tokensOut?: number;
+  costUsd?: number;
+  ms?: number;
+}
+
+export interface Arena {
+  id: string;
+  stage: number;
+  agentId: string;
+  /** Who started it — their keys pay and only they pick the winner. */
+  byUserId: number;
+  byName?: string;
+  /** Hide model names until a winner is picked. */
+  blind: boolean;
+  entries: ArenaEntry[];
+  createdAt: number;
+  pickedModelId?: string;
 }
 
 export interface Note {
@@ -248,4 +288,53 @@ export interface ApiKeyStatus {
   /** e.g. "sk-…a1b2" — never the secret itself. */
   hint: string;
   updatedAt?: number;
+}
+
+// ─── Stats page ──────────────────────────────────────────────────────────────
+
+export interface StatsAgentRow {
+  agentId: string;
+  name: string;
+  ownerName: string;
+  mine: boolean;
+  role: RoleId;
+  look: Look;
+  modelName: string;
+  /** Results delivered (every version, incl. redone steps). */
+  steps: number;
+  /** Average time per step in seconds, when known. */
+  avgSeconds: number | null;
+  /** Times their step was sent back (by a person or a reviewer agent). */
+  sentBack: number;
+  questions: number;
+  /** Your spending on this agent in the window (only for your own agents). */
+  costUsd: number | null;
+}
+
+export interface StatsModelRow {
+  modelName: string;
+  steps: number;
+  avgSeconds: number | null;
+  costUsd: number;
+  calls: number;
+  arenaWins: number;
+  arenaGames: number;
+}
+
+export interface ArenaScore {
+  modelKey: string;
+  modelName: string;
+  wins: number;
+  games: number;
+}
+
+export interface Stats {
+  /** Cost figures cover the days since this date ("YYYY-MM-DD"). */
+  sinceDay: string;
+  totals: { steps: number; tasksDone: number; firstPass: number; reviewed: number; costUsd: number; avgSeconds: number | null; autoRevisions: number };
+  agents: StatsAgentRow[];
+  models: StatsModelRow[];
+  costDaily: { day: string; costUsd: number; calls: number }[];
+  team: { columns: Record<ColumnId, number>; contributors: { userName: string; steps: number }[]; questions: number; blocked: number };
+  arena: { mine: ArenaScore[]; team: ArenaScore[] };
 }

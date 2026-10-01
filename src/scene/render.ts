@@ -41,7 +41,7 @@ export function renderScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElement
     cards: s.tasks
       .filter((x) => x.column === id)
       .sort((a, b) => PRIO[a.priority] - PRIO[b.priority])
-      .map((x) => ({ priority: x.priority, active: x.active, blocked: !!x.blocked })),
+      .map((x) => ({ priority: x.priority, active: x.active, blocked: !!x.blocked, asking: !!x.question })),
   }));
   drawBoard(ctx, columns, translate(s.settings.lang, 'board'), hover?.kind === 'board', t);
   const latest = [...s.watchSummaries].sort((a, b) => b.at - a.at)[0];

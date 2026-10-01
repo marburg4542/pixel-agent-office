@@ -60,6 +60,10 @@ interface Actions {
   approveTask: (id: string) => Promise<void>;
   requestChanges: (id: string, agentId: string, text: string) => Promise<void>;
   retryTask: (id: string) => Promise<void>;
+  answerQuestion: (id: string, text: string) => Promise<void>;
+  startArena: (id: string, stage: number, modelIds: string[], blind: boolean) => Promise<void>;
+  pickArena: (id: string, modelId: string, use: boolean) => Promise<void>;
+  closeArena: (id: string) => Promise<void>;
   setKeys: (keys: ApiKeyStatus[]) => void;
   refreshUsage: () => Promise<void>;
 
@@ -270,6 +274,22 @@ export const useStore = create<State>()((set, get) => {
     },
     retryTask: async (id) => {
       const task = await api<Task>(`/tasks/${id}/retry`, { method: 'POST' });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+    },
+    answerQuestion: async (id, text) => {
+      const task = await api<Task>(`/tasks/${id}/answer`, { method: 'POST', body: { text } });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+    },
+    startArena: async (id, stage, modelIds, blind) => {
+      const task = await api<Task>(`/tasks/${id}/arena`, { method: 'POST', body: { stage, modelIds, blind } });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+    },
+    pickArena: async (id, modelId, use) => {
+      const task = await api<Task>(`/tasks/${id}/arena/pick`, { method: 'POST', body: { modelId, use } });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+    },
+    closeArena: async (id) => {
+      const task = await api<Task>(`/tasks/${id}/arena`, { method: 'DELETE' });
       set((s) => ({ tasks: upsert(s.tasks, task) }));
     },
     setKeys: (keys) => set({ keys }),

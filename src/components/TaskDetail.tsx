@@ -8,6 +8,7 @@ import { copyText, downloadText, slug } from '../lib/files';
 import type { ColumnId, Lang, Task } from '../types';
 import { Markdown } from './Markdown';
 import { ResearchView } from './ResearchView';
+import { ArenaSetup, ArenaView, QaHistory, QuestionBox } from './Collab';
 
 /** All step results as one Markdown document. */
 function resultsMarkdown(task: Task, lang: Lang): string {
@@ -38,6 +39,7 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
   const [fbText, setFbText] = useState('');
   const [fbAgent, setFbAgent] = useState('');
   const [busy, setBusy] = useState(false);
+  const [arenaFor, setArenaFor] = useState<number | null>(null);
 
   // Deleted while open (e.g. from the editor on top of us or by a teammate): close ourselves.
   useEffect(() => {
@@ -101,6 +103,8 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
         </div>
       </div>
 
+      {task.question && <QuestionBox task={task} />}
+      {(task.autoRevisions ?? 0) > 0 && <div className="hint" style={{ marginTop: 6 }}>🔁 {t('autoRevisedTimes', { n: task.autoRevisions ?? 0 })}</div>}
       {task.blocked && <BlockedBox task={task} busy={busy} onRetry={() => void act(() => retryTask(taskId))} />}
 
       {task.column === 'review' && (
@@ -163,6 +167,8 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
         </div>
       )}
 
+      <QaHistory task={task} />
+
       <div className="section-title">
         🧾 {t('outputs')}
         {task.outputs.length > 0 && (
@@ -200,6 +206,12 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
                 </div>
                 <span style={{ marginLeft: 'auto' }} className="row">
                   {out && !(isCurrent && liveHere) && out.score > 0 && <Stars value={out.score} />}
+                  {out?.arena && <span className="chip" title={t('arena_winnerHint')}>🏆</span>}
+                  {out && !liveHere && !task.arena && (
+                    <button className="btn sm" title={t('arena_tip')} aria-expanded={arenaFor === i} onClick={() => setArenaFor(arenaFor === i ? null : i)}>
+                      ⚔️ {t('arena')}
+                    </button>
+                  )}
                   <strong>{state}</strong>
                 </span>
               </div>
@@ -239,6 +251,8 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
               ) : (
                 <div className="stage-out empty">{t('noOutputs')}</div>
               )}
+              {arenaFor === i && !task.arena && <ArenaSetup task={task} stage={i} onDone={() => setArenaFor(null)} />}
+              {task.arena?.stage === i && <ArenaView task={task} />}
             </div>
           );
         })}

@@ -64,20 +64,22 @@ export const desktopNotify = {
 
 /** Tab title shows how many tasks wait for review; a desktop notification when one arrives while you're away. */
 export function useReviewAlerts(): void {
-  const review = useStore((s) => s.tasks.filter((t) => t.column === 'review').length);
+  // Things waiting on a person: tasks to review and questions from agents.
+  const waiting = useStore((s) => s.tasks.filter((t) => t.column === 'review' || t.question).length);
   useEffect(() => {
-    document.title = review > 0 ? `(${review}) Pixel Agent Office` : 'Pixel Agent Office';
-  }, [review]);
+    document.title = waiting > 0 ? `(${waiting}) Pixel Agent Office` : 'Pixel Agent Office';
+  }, [waiting]);
   useEffect(() => () => void (document.title = 'Pixel Agent Office'), []);
 
   useEffect(
     () =>
       onServerEvent('feed', (d) => {
         const item = d as { key: string; params?: Record<string, string | number> };
-        if (item.key !== 'feed_review' || !document.hidden || !desktopNotify.enabled()) return;
+        if ((item.key !== 'feed_review' && item.key !== 'feed_asked') || !document.hidden || !desktopNotify.enabled()) return;
         const lang = useStore.getState().settings.lang;
+        const title = item.key === 'feed_asked' ? 'notify_questionTitle' : 'notify_reviewTitle';
         try {
-          new Notification(translate(lang, 'notify_reviewTitle'), { body: translate(lang, item.key, item.params), tag: 'pao-review' });
+          new Notification(translate(lang, title), { body: translate(lang, item.key, item.params), tag: `pao-${item.key}` });
         } catch {
           /* some browsers only allow notifications from a service worker */
         }

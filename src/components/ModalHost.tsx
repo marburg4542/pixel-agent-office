@@ -13,6 +13,7 @@ import { SettingsWindow } from './SettingsWindow';
 import { UsersWindow } from './UsersWindow';
 import { HelpWindow } from './HelpWindow';
 import { NewsroomWindow, WatchlistEditor } from './Newsroom';
+import { StatsWindow } from './StatsWindow';
 import { Window } from './ui';
 
 export function ModalHost() {
@@ -90,6 +91,8 @@ function ModalView({ modal, z }: { modal: Modal; z: number }) {
       return <NewsroomWindow z={z} onClose={onClose} watchlistId={modal.watchlistId} />;
     case 'watchEdit':
       return <WatchlistEditor z={z} onClose={onClose} watchlistId={modal.watchlistId} />;
+    case 'stats':
+      return <StatsWindow z={z} onClose={onClose} />;
     case 'confirm':
       return <Confirm z={z} modal={modal} onClose={onClose} />;
   }

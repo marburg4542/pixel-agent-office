@@ -16,6 +16,7 @@ export type Modal =
   | { kind: 'help'; step?: number }
   | { kind: 'newsroom'; watchlistId?: string }
   | { kind: 'watchEdit'; watchlistId?: string }
+  | { kind: 'stats' }
   | { kind: 'confirm'; message: string; onYes: () => void; danger?: boolean };
 
 export type SettingsTab = 'profile' | 'sound' | 'ai' | 'keys' | 'data';

@@ -105,6 +105,30 @@ db.exec(`
     PRIMARY KEY (user_id, month, model_id)
   );
 
+  -- The same spending per day and agent, for the stats page ('' = Model Arena runs).
+  CREATE TABLE IF NOT EXISTS usage_daily (
+    user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL DEFAULT '',
+    model_name TEXT NOT NULL,
+    tokens_in INTEGER NOT NULL DEFAULT 0,
+    tokens_out INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    calls INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, day, model_id, agent_id)
+  );
+
+  -- Model Arena picks: every model in an arena plays one game; the picked one wins it.
+  CREATE TABLE IF NOT EXISTS arena_votes (
+    user_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+    model_key TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    wins INTEGER NOT NULL DEFAULT 0,
+    games INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, model_key)
+  );
+
   -- Newsroom: watchlists and the reports their runs produce (the newest ~30 per watchlist are kept).
   CREATE TABLE IF NOT EXISTS watchlists (
     id TEXT PRIMARY KEY,

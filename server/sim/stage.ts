@@ -2,6 +2,7 @@ import type { Agent, Lang, ModelDef, Note, StageOutput, Task } from '../../share
 import { roleById } from '../../shared/roles';
 import { translate } from '../../shared/i18n';
 import { clamp, pick, randInt } from '../../shared/util';
+import { collabInstructions, qaForPrompt, simVerdict } from './collab';
 
 /**
  * Everything an agent "knows" when it works one step of a task.
@@ -58,7 +59,7 @@ const ROLE_GUIDE: Record<Agent['role'], string> = {
   coder: 'You write working code in fenced blocks with a language tag, handle errors and edge cases, and add a short usage example.',
   writer: 'You write clear, engaging prose for the intended reader, with a headline and tight structure.',
   designer: "You design concretely: layout sections, colors as hex codes, typography and components. You can't produce images, so describe precisely.",
-  reviewer: "You review the work handed to you against the brief: what's good, issues ranked by severity, and concrete fixes. End with a verdict line: ✅ Approve or ✎ Needs changes.",
+  reviewer: "You review the work handed to you against the brief: what's good, issues ranked by severity, and concrete fixes.",
   tester: 'You design tests: a table of cases with inputs and expected results, plus the risky gaps you see.',
   custom: 'Follow your standing instructions.',
 };
@@ -80,6 +81,7 @@ export function buildPrompt(ctx: StageContext, lang: Lang): { system: string; us
     ROLE_GUIDE[agent.role],
     agent.instructions && `Standing instructions from your manager:\n${agent.instructions}`,
     `Write your result in Markdown, in ${lang === 'th' ? 'Thai' : 'English'}. Deliver the work itself — no preamble about what you are going to do.`,
+    collabInstructions(ctx),
     `Today is ${new Date().toISOString().slice(0, 10)}.`,
   ]
     .filter(Boolean)
@@ -92,6 +94,7 @@ export function buildPrompt(ctx: StageContext, lang: Lang): { system: string; us
     previous.forEach((p, i) => parts.push(`### Step ${p.stage + 1} by ${p.agentName}\n${clip(p.text, i === previous.length - 1 ? 24000 : 6000)}`));
   }
   if (notes.length) parts.push('## Notes from your manager', ...notes.map((n) => `- ${n.text}`));
+  parts.push(qaForPrompt(ctx));
   parts.push(
     nextAgent
       ? `Your result goes next to ${nextAgent.name} (${roleName('en', nextAgent)}).`
@@ -182,6 +185,7 @@ export function simulateOutput(ctx: StageContext, lang: Lang): { text: string; s
       lines.push(th ? `ผลการตรวจ${prev ? `งานของ ${prev.agentName}` : ''}` : `Review${prev ? ` of ${prev.agentName}'s work` : ''}`);
       sample(P.review, 3).forEach((s) => lines.push(`✔ ${s}`));
       lines.push(`✎ ${pick(P.suggest)}`);
+      lines.push('', simVerdict(ctx, lang));
       break;
     }
     case 'tester': {
