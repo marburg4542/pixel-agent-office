@@ -596,7 +596,7 @@ const en: Dict = {
   // expansion
   log_planned: '{agent} planned the work: {plan}',
   log_planReason: 'Why: {text}',
-  feed_planned: '🧭 {agent} planned “{task}”',
+  feed_planned: '👔 {agent} planned “{task}”',
   bubble_planned: 'Planned!',
   parallel: 'together',
   parallelHint: 'These steps run at the same time; the task goes on when all of them are done.',
@@ -1212,7 +1212,7 @@ const th: Dict = {
   // expansion
   log_planned: '{agent} วางลำดับงาน: {plan}',
   log_planReason: 'เหตุผล: {text}',
-  feed_planned: '🧭 {agent} วางแผนงาน “{task}”',
+  feed_planned: '👔 {agent} วางแผนงาน “{task}”',
   bubble_planned: 'จัดให้แล้ว!',
   parallel: 'ทำพร้อมกัน',
   parallelHint: 'ขั้นเหล่านี้ทำพร้อมกัน งานจะไปต่อเมื่อทุกคนในกลุ่มทำเสร็จ',
