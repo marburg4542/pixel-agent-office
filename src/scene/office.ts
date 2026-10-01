@@ -1,4 +1,4 @@
-import { BOARD, CLOCK, LEFT_WINDOW, NOTES_AREA, RIGHT_WINDOW, SCENE_H, SCENE_W, WALL_H, type DeskPos } from './layout';
+import { BOARD, CLOCK, LEFT_WINDOW, NOTES_AREA, RIGHT_WINDOW, SCENE_H, SCENE_W, TV, WALL_H, type DeskPos } from './layout';
 import { mix, shade, tint } from '../sprites/color';
 
 export const FONT = '"Pixelify Sans", "Chakra Petch", sans-serif';
@@ -57,7 +57,37 @@ function prng(seed: number) {
   };
 }
 
-export function renderBackground(): HTMLCanvasElement {
+export type OfficeTheme = 'wood' | 'modern';
+
+/** Colors that change with the office theme. */
+const PALETTES = {
+  wood: {
+    wall: '#efe0c0', wallStripe: '#ecdbb8', wainscot: '#c9a878', wainscotTop: '#a8845a', panel: '#bf9d6c', panelTop: '#b08e5e', panelBottom: '#d6b98c', baseboard: '#6b4a32',
+    floorA: '#b27e4d', floorB: '#ba8756', floorHi: '#c99464', floorLo: '#8f5e36', floorKnot: '#a87446', tiles: false,
+    frameDark: '#6b4a32', frame: '#8a6242', sillShadow: '#5a3a24',
+    boardFrame: '#5a3a24', boardInner: '#7a5236', boardSurface: '#c8955a', boardSpeck: ['#b8834a', '#d6a56c'],
+    clock: '#5a3a24',
+    deskEdge: '#3a2418', deskTop: '#a06e46', deskTopHi: '#bd8a5c', deskTopLo: '#8a5a38', deskFront: '#7a4e32', deskFrontLo: '#5e3a24',
+    chair: '#b8443c', chairHi: '#d8625a', chairSide: '#d05a52', chairTuft: '#8a2f2a', armrest: '#5a4a52',
+  },
+  modern: {
+    wall: '#eef1f4', wallStripe: '#e8ecf0', wainscot: '#cfd6de', wainscotTop: '#aeb7c2', panel: '#c5cdd6', panelTop: '#b3bcc6', panelBottom: '#dde3e9', baseboard: '#6f7a87',
+    floorA: '#d6dbe1', floorB: '#d1d6dd', floorHi: '#e3e7eb', floorLo: '#bcc3cb', floorKnot: '#c8ced5', tiles: true,
+    frameDark: '#5d6773', frame: '#8a939e', sillShadow: '#4b5560',
+    boardFrame: '#5d6773', boardInner: '#9aa3ad', boardSurface: '#f7f9fb', boardSpeck: ['#eef1f4', '#e6eaee'],
+    clock: '#3c4450',
+    deskEdge: '#3c4450', deskTop: '#f1f3f5', deskTopHi: '#ffffff', deskTopLo: '#cdd3d9', deskFront: '#e2e6ea', deskFrontLo: '#9aa3ad',
+    chair: '#2f6f9f', chairHi: '#4a8cc0', chairSide: '#3f81b3', chairTuft: '#24557a', armrest: '#4b5560',
+  },
+};
+let pal = PALETTES.wood;
+/** Pick the colors the next frame is drawn with. */
+export function setOfficeTheme(theme: OfficeTheme | undefined): void {
+  pal = PALETTES[theme ?? 'wood'] ?? PALETTES.wood;
+}
+
+export function renderBackground(theme: OfficeTheme = 'wood'): HTMLCanvasElement {
+  setOfficeTheme(theme);
   const c = document.createElement('canvas');
   c.width = SCENE_W;
   c.height = SCENE_H;
@@ -65,29 +95,34 @@ export function renderBackground(): HTMLCanvasElement {
   const rnd = prng(7);
 
   // Wall
-  rect(ctx, 0, 0, SCENE_W, WALL_H, '#efe0c0');
-  for (let x = 0; x < SCENE_W; x += 16) rect(ctx, x, 0, 8, 44, '#ecdbb8');
+  rect(ctx, 0, 0, SCENE_W, WALL_H, pal.wall);
+  for (let x = 0; x < SCENE_W; x += 16) rect(ctx, x, 0, 8, 44, pal.wallStripe);
   // Wainscot
-  rect(ctx, 0, 44, SCENE_W, 18, '#c9a878');
-  rect(ctx, 0, 44, SCENE_W, 2, '#a8845a');
+  rect(ctx, 0, 44, SCENE_W, 18, pal.wainscot);
+  rect(ctx, 0, 44, SCENE_W, 2, pal.wainscotTop);
   for (let x = 4; x < SCENE_W; x += 28) {
-    rect(ctx, x, 48, 24, 11, '#bf9d6c');
-    rect(ctx, x, 48, 24, 1, '#b08e5e');
-    rect(ctx, x, 58, 24, 1, '#d6b98c');
+    rect(ctx, x, 48, 24, 11, pal.panel);
+    rect(ctx, x, 48, 24, 1, pal.panelTop);
+    rect(ctx, x, 58, 24, 1, pal.panelBottom);
   }
-  rect(ctx, 0, 62, SCENE_W, 2, '#6b4a32');
+  rect(ctx, 0, 62, SCENE_W, 2, pal.baseboard);
 
   // Floor planks
   const plankH = 7;
   for (let y = WALL_H, row = 0; y < SCENE_H; y += plankH, row++) {
-    rect(ctx, 0, y, SCENE_W, plankH, row % 2 ? '#b27e4d' : '#ba8756');
-    rect(ctx, 0, y, SCENE_W, 1, '#c99464');
-    rect(ctx, 0, y + plankH - 1, SCENE_W, 1, '#8f5e36');
+    rect(ctx, 0, y, SCENE_W, plankH, row % 2 ? pal.floorA : pal.floorB);
+    rect(ctx, 0, y, SCENE_W, 1, pal.floorHi);
+    rect(ctx, 0, y + plankH - 1, SCENE_W, 1, pal.floorLo);
+    if (pal.tiles) {
+      // Tiles: a regular grid, offset every other row.
+      for (let x = (row % 2) * 7; x < SCENE_W; x += 14) rect(ctx, x, y + 1, 1, plankH - 2, pal.floorLo);
+      continue;
+    }
     let x = -Math.floor(rnd() * 40);
     while (x < SCENE_W) {
       x += 34 + Math.floor(rnd() * 30);
-      rect(ctx, x, y + 1, 1, plankH - 2, '#8f5e36');
-      if (rnd() < 0.3) rect(ctx, x + 6 + Math.floor(rnd() * 14), y + 3, 2, 1, '#a87446');
+      rect(ctx, x, y + 1, 1, plankH - 2, pal.floorLo);
+      if (rnd() < 0.3) rect(ctx, x + 6 + Math.floor(rnd() * 14), y + 3, 2, 1, pal.floorKnot);
     }
   }
   // Soft shadow where floor meets wall
@@ -95,28 +130,28 @@ export function renderBackground(): HTMLCanvasElement {
 
   // Window frames (interiors are drawn live)
   for (const w of [LEFT_WINDOW, RIGHT_WINDOW]) {
-    rect(ctx, w.x - 3, w.y - 3, w.w + 6, w.h + 6, '#6b4a32');
-    rect(ctx, w.x - 2, w.y - 2, w.w + 4, w.h + 4, '#8a6242');
-    rect(ctx, w.x - 5, w.y + w.h + 2, w.w + 10, 3, '#8a6242');
-    rect(ctx, w.x - 5, w.y + w.h + 5, w.w + 10, 1, '#5a3a24');
+    rect(ctx, w.x - 3, w.y - 3, w.w + 6, w.h + 6, pal.frameDark);
+    rect(ctx, w.x - 2, w.y - 2, w.w + 4, w.h + 4, pal.frame);
+    rect(ctx, w.x - 5, w.y + w.h + 2, w.w + 10, 3, pal.frame);
+    rect(ctx, w.x - 5, w.y + w.h + 5, w.w + 10, 1, pal.sillShadow);
   }
 
   // Board frame & cork
   const b = BOARD;
   rect(ctx, b.x + 2, b.y + 2, b.w, b.h, 'rgba(60,30,10,0.25)');
-  rect(ctx, b.x, b.y, b.w, b.h, '#5a3a24');
-  rect(ctx, b.x + 1, b.y + 1, b.w - 2, b.h - 2, '#7a5236');
-  rect(ctx, b.x + 3, b.y + 3, b.w - 6, b.h - 6, '#c8955a');
+  rect(ctx, b.x, b.y, b.w, b.h, pal.boardFrame);
+  rect(ctx, b.x + 1, b.y + 1, b.w - 2, b.h - 2, pal.boardInner);
+  rect(ctx, b.x + 3, b.y + 3, b.w - 6, b.h - 6, pal.boardSurface);
   for (let i = 0; i < 220; i++) {
     const x = b.x + 3 + Math.floor(rnd() * (b.w - 6));
     const y = b.y + 3 + Math.floor(rnd() * (b.h - 6));
-    rect(ctx, x, y, 1, 1, rnd() < 0.5 ? '#b8834a' : '#d6a56c');
+    rect(ctx, x, y, 1, 1, rnd() < 0.5 ? pal.boardSpeck[0] : pal.boardSpeck[1]);
   }
 
   // Clock body
   const cx = CLOCK.x;
   const cy = CLOCK.y;
-  ctx.fillStyle = '#5a3a24';
+  ctx.fillStyle = pal.clock;
   ctx.beginPath();
   ctx.arc(cx, cy, 9, 0, Math.PI * 2);
   ctx.fill();
@@ -216,6 +251,8 @@ export const PRIORITY_COLORS = { low: '#7fbf7f', med: '#f2c94c', high: '#e0524a'
 export interface BoardCard {
   priority: keyof typeof PRIORITY_COLORS;
   active: boolean;
+  blocked: boolean;
+  asking: boolean;
 }
 
 export function drawBoard(
@@ -236,6 +273,8 @@ export function drawBoard(
       rect(ctx, x, y, 2, 5, PRIORITY_COLORS[card.priority]);
       rect(ctx, x + 4, y + 2, 10, 1, '#c9bfa8');
       if (card.active && Math.floor(t * 3) % 2 === 0) rect(ctx, x + colW - 5, y + 1, 2, 2, '#f0a030');
+      if (card.blocked) rect(ctx, x + colW - 5, y + 1, 2, 3, '#d8453e');
+      else if (card.asking && Math.floor(t * 2) % 2 === 0) rect(ctx, x + colW - 5, y + 1, 2, 3, '#f0a030');
     });
     if (col.cards.length > max) text(ctx, `+${col.cards.length - max}`, x + colW / 2, b.y + b.h - 4, { size: 4, color: '#5a3a24' });
   });
@@ -266,6 +305,44 @@ export function drawWallNotes(ctx: Ctx, notes: { color: string; unread: boolean 
   });
 }
 
+/**
+ * Newsroom TV: the latest watchlist's sentiment trend with a scrolling ticker; a blinking LIVE dot
+ * while an agent is doing a run.
+ */
+export function drawTv(ctx: Ctx, t: number, o: { trend: number[]; live: boolean; hover: boolean }): void {
+  const { x, y, w, h } = TV;
+  rect(ctx, x + 2, y + 2, w, h, 'rgba(60,30,10,0.25)');
+  rect(ctx, x, y, w, h, o.hover ? '#4a4366' : INK);
+  const sx = x + 2;
+  const sy = y + 2;
+  const sw = w - 4;
+  const sh = h - 6;
+  rect(ctx, sx, sy, sw, sh, '#1d3557');
+  // Trend line (scores −1…1) over a faint zero line.
+  rect(ctx, sx, sy + Math.floor(sh / 2) - 2, sw, 1, '#2f4b73');
+  if (o.trend.length > 1) {
+    const pts = o.trend.slice(-8);
+    for (let i = 0; i < pts.length; i++) {
+      const px = sx + 1 + Math.round((i / (pts.length - 1)) * (sw - 3));
+      const py = sy + 1 + Math.round(((1 - pts[i]) / 2) * (sh - 6));
+      rect(ctx, px, py, 2, 2, pts[i] >= 0 ? '#8fd3ff' : '#ff8a80');
+    }
+  } else {
+    text(ctx, 'NEWS', sx + sw / 2, sy + sh / 2 - 2, { size: 5, color: '#cfe3ff', weight: 700 });
+  }
+  // Ticker band
+  rect(ctx, sx, sy + sh - 4, sw, 4, '#e8d9b8');
+  const off = Math.floor(t * 8) % 12;
+  for (let bx = -off; bx < sw; bx += 12) {
+    const x0 = Math.max(0, bx);
+    const x1 = Math.min(sw, bx + 7);
+    if (x1 > x0) rect(ctx, sx + x0, sy + sh - 3, x1 - x0, 2, '#6b5f73');
+  }
+  if (o.live && Math.floor(t * 2) % 2 === 0) rect(ctx, sx + sw - 4, sy + 1, 3, 3, '#ff4d4d');
+  // Stand-by light & bezel
+  rect(ctx, x + w - 5, y + h - 3, 2, 1, o.live ? '#ff4d4d' : '#5ec27a');
+}
+
 // ─── Furniture ──────────────────────────────────────────────────────────────
 
 export function drawChair(ctx: Ctx, x: number, y: number): void {
@@ -273,18 +350,18 @@ export function drawChair(ctx: Ctx, x: number, y: number): void {
   const line = '#2a1e2e';
   rect(ctx, x - 5, y - 22, 11, 1, line);
   rect(ctx, x - 7, y - 21, 15, 15, line);
-  rect(ctx, x - 6, y - 21, 13, 15, '#b8443c');
-  rect(ctx, x - 5, y - 21, 11, 1, '#d8625a');
-  rect(ctx, x - 6, y - 20, 1, 14, '#d05a52');
-  rect(ctx, x - 1, y - 18, 1, 1, '#8a2f2a');
-  rect(ctx, x + 1, y - 18, 1, 1, '#8a2f2a');
-  rect(ctx, x - 1, y - 14, 1, 1, '#8a2f2a');
-  rect(ctx, x + 1, y - 14, 1, 1, '#8a2f2a');
+  rect(ctx, x - 6, y - 21, 13, 15, pal.chair);
+  rect(ctx, x - 5, y - 21, 11, 1, pal.chairHi);
+  rect(ctx, x - 6, y - 20, 1, 14, pal.chairSide);
+  rect(ctx, x - 1, y - 18, 1, 1, pal.chairTuft);
+  rect(ctx, x + 1, y - 18, 1, 1, pal.chairTuft);
+  rect(ctx, x - 1, y - 14, 1, 1, pal.chairTuft);
+  rect(ctx, x + 1, y - 14, 1, 1, pal.chairTuft);
   // armrests
   rect(ctx, x - 11, y - 10, 5, 4, line);
-  rect(ctx, x - 10, y - 9, 4, 2, '#5a4a52');
+  rect(ctx, x - 10, y - 9, 4, 2, pal.armrest);
   rect(ctx, x + 6, y - 10, 5, 4, line);
-  rect(ctx, x + 6, y - 9, 4, 2, '#5a4a52');
+  rect(ctx, x + 6, y - 9, 4, 2, pal.armrest);
 }
 
 export interface DeskDrawOpts {
@@ -295,6 +372,8 @@ export interface DeskDrawOpts {
   working?: boolean;
   queue?: number;
   hover?: boolean;
+  /** 0…1 how dark it is — lamps glow at night. */
+  night?: number;
   t: number;
 }
 
@@ -303,16 +382,16 @@ export function drawDesk(ctx: Ctx, d: DeskPos, o: DeskDrawOpts): void {
   // floor shadow
   rect(ctx, x - 23, y, 46, 2, 'rgba(60,30,10,0.22)');
   // legs
-  rect(ctx, x - 23, y - 3, 3, 3, '#3a2418');
-  rect(ctx, x + 20, y - 3, 3, 3, '#3a2418');
+  rect(ctx, x - 23, y - 3, 3, 3, pal.deskEdge);
+  rect(ctx, x + 20, y - 3, 3, 3, pal.deskEdge);
   // top surface
-  rect(ctx, x - 25, y - 23, 50, 21, '#3a2418');
-  rect(ctx, x - 24, y - 22, 48, 8, '#a06e46');
-  rect(ctx, x - 24, y - 22, 48, 1, '#bd8a5c');
-  rect(ctx, x - 24, y - 15, 48, 1, '#8a5a38');
+  rect(ctx, x - 25, y - 23, 50, 21, pal.deskEdge);
+  rect(ctx, x - 24, y - 22, 48, 8, pal.deskTop);
+  rect(ctx, x - 24, y - 22, 48, 1, pal.deskTopHi);
+  rect(ctx, x - 24, y - 15, 48, 1, pal.deskTopLo);
   // front panel
-  rect(ctx, x - 24, y - 14, 48, 11, '#7a4e32');
-  rect(ctx, x - 24, y - 4, 48, 1, '#5e3a24');
+  rect(ctx, x - 24, y - 14, 48, 11, pal.deskFront);
+  rect(ctx, x - 24, y - 4, 48, 1, pal.deskFrontLo);
 
   if (!o.empty) {
     // nameplate
@@ -326,6 +405,14 @@ export function drawDesk(ctx: Ctx, d: DeskPos, o: DeskDrawOpts): void {
     rect(ctx, x - 20, y - 26, 3, 1, '#6b3e26');
     rect(ctx, x - 16, y - 25, 1, 2, '#3a2418');
     if (o.working && Math.floor(o.t * 2) % 2 === 0) rect(ctx, x - 19, y - 30, 1, 2, 'rgba(255,255,255,0.7)');
+
+    // desk lamp (on at night while someone is at the desk)
+    const lampOn = (o.night ?? 0) > 0.2;
+    rect(ctx, x - 13, y - 24, 5, 2, '#3a2418');
+    rect(ctx, x - 11, y - 31, 1, 7, '#3a2418');
+    rect(ctx, x - 14, y - 34, 6, 3, '#3a2418');
+    rect(ctx, x - 13, y - 33, 4, 1, lampOn ? '#ffd27a' : '#6e8c5a');
+    if (lampOn) rect(ctx, x - 12, y - 31, 2, 1, '#fff2b8');
 
     // paper stack = queued work
     const q = Math.min(o.queue ?? 0, 5);
@@ -433,4 +520,78 @@ export function drawPaper(ctx: Ctx, x: number, y: number): void {
   rect(ctx, x - 2, y - 3, 5, 6, '#fdf6e3');
   rect(ctx, x - 1, y - 2, 3, 1, '#9a8a7a');
   rect(ctx, x - 1, y, 3, 1, '#9a8a7a');
+}
+
+/** Where each lamp's light comes from (for the night overlay). */
+export const lampLight = (d: DeskPos) => ({ x: d.x - 11, y: d.y - 28 });
+
+export type EmoteKind = 'heart' | 'sweat' | 'question' | 'anger' | 'cup' | 'note' | 'drop';
+
+const EMOTES: Record<EmoteKind, { rows: string[]; pal: Record<string, string> }> = {
+  heart: { rows: ['.rr.rr.', 'rRRrRRr', 'rRRRRRr', '.rRRRr.', '..rRr..', '...r...'], pal: { r: '#8c1f3a', R: '#ff5c7a' } },
+  sweat: { rows: ['..b..', '.bBb.', 'bBBBb', 'bBwBb', '.bbb.'], pal: { b: '#2a4f8a', B: '#7ec8ff', w: '#ffffff' } },
+  question: { rows: ['.ooo.', 'oyyyo', 'o..yo', '..yo.', '..o..', '.....', '..y..'], pal: { o: '#2a1e2e', y: '#ffd24a' } },
+  anger: { rows: ['r.r.r', '.r.r.', 'r...r', '.r.r.', 'r.r.r'], pal: { r: '#e0303a' } },
+  cup: { rows: ['.s.s.', '.....', 'ooooo.', 'owwwoo', 'owwwo.', '.ooo..'], pal: { s: '#ffffff', o: '#2a1e2e', w: '#f4f1ea' } },
+  note: { rows: ['..ooo', '..o.o', '..o.o', 'ooo.o', 'ooo..'], pal: { o: '#2a1e2e' } },
+  drop: { rows: ['.b.', 'bBb', '.b.'], pal: { b: '#2a4f8a', B: '#7ec8ff' } },
+};
+
+/** A small pixel icon above an agent's head (feelings, coffee, …). */
+export function drawEmote(ctx: Ctx, x: number, y: number, kind: EmoteKind): void {
+  const e = EMOTES[kind];
+  const w = Math.max(...e.rows.map((r) => r.length));
+  const x0 = Math.round(x - w / 2);
+  e.rows.forEach((row, j) => {
+    for (let i = 0; i < row.length; i++) {
+      const c = e.pal[row[i]];
+      if (c) rect(ctx, x0 + i, y + j, 1, 1, c);
+    }
+  });
+}
+
+/**
+ * Night: darken the room, then let desk lamps (and the TV) glow. `lights` are the lamps that are on.
+ * Drawn through a reusable offscreen canvas so the lights cut holes in the darkness.
+ */
+let darkness: HTMLCanvasElement | null = null;
+export function drawNight(ctx: Ctx, level: number, lights: { x: number; y: number; r: number }[]): void {
+  if (level <= 0) return;
+  darkness ??= document.createElement('canvas');
+  darkness.width = SCENE_W;
+  darkness.height = SCENE_H;
+  const d = darkness.getContext('2d')!;
+  d.globalCompositeOperation = 'source-over';
+  d.clearRect(0, 0, SCENE_W, SCENE_H);
+  d.fillStyle = `rgba(14, 18, 48, ${0.55 * level})`;
+  d.fillRect(0, 0, SCENE_W, SCENE_H);
+  d.globalCompositeOperation = 'destination-out';
+  for (const l of lights) {
+    const g = d.createRadialGradient(l.x, l.y, 2, l.x, l.y, l.r);
+    g.addColorStop(0, 'rgba(0,0,0,0.95)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    d.fillStyle = g;
+    d.fillRect(l.x - l.r, l.y - l.r, l.r * 2, l.r * 2);
+  }
+  ctx.drawImage(darkness, 0, 0);
+  // warm glow
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const l of lights) {
+    const g = ctx.createRadialGradient(l.x, l.y, 1, l.x, l.y, l.r * 0.7);
+    g.addColorStop(0, `rgba(255, 190, 110, ${0.22 * level})`);
+    g.addColorStop(1, 'rgba(255, 190, 110, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(l.x - l.r, l.y - l.r, l.r * 2, l.r * 2);
+  }
+  ctx.restore();
+}
+
+/** 0 by day, 1 at night (after 19:00 until 05:00), fading over an hour at dusk and dawn. */
+export function nightLevel(now: Date): number {
+  const h = now.getHours() + now.getMinutes() / 60;
+  if (h >= 19 || h < 5) return 1;
+  if (h >= 18) return h - 18;
+  if (h < 6) return 6 - h;
+  return 0;
 }

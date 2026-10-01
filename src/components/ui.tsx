@@ -1,11 +1,12 @@
-import { useEffect, useReducer, type ReactNode } from 'react';
-import type { Agent, Look, ProviderId } from '../types';
+import { useEffect, useReducer, useState, type ReactNode } from 'react';
+import type { Look, ProviderId, PublicUser, RoleId } from '../types';
 import { avatarUrl } from '../sprites/character';
-import { PROVIDERS } from '../data/models';
+import { PROVIDERS } from '../../shared/models';
+import { roleById } from '../../shared/roles';
 import { useStore, useT } from '../store';
-import { roleById } from '../data/roles';
+import { assetUrl } from '../lib/api';
 
-/** Re-render every `ms` — for values that live in the simulation engine rather than the store. */
+/** Re-render every `ms` — for values extrapolated from the server's runtime. */
 export function useTicker(ms: number, enabled = true): void {
   const [, tick] = useReducer((x: number) => x + 1, 0);
   useEffect(() => {
@@ -24,19 +25,26 @@ export function Window(props: {
   className?: string;
   bodyClassName?: string;
   z: number;
+  /** 'drawer' docks to the right edge without covering the office. */
+  variant?: 'modal' | 'drawer';
+  actions?: ReactNode;
 }) {
+  const drawer = props.variant === 'drawer';
   return (
     <div
-      className="overlay"
+      className={`overlay ${drawer ? 'drawer' : ''}`}
       style={{ zIndex: 20 + props.z }}
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) props.onClose();
+        if (!drawer && e.target === e.currentTarget) props.onClose();
       }}
     >
-      <div className={`window ${props.className ?? ''}`} style={{ width: props.width }} role="dialog" aria-modal="true">
+      <div className={`window ${props.className ?? ''}`} style={{ width: drawer ? undefined : props.width }} role="dialog" aria-modal={!drawer}>
         <div className="titlebar">
           <span>{props.title}</span>
-          <button className="x" onClick={props.onClose} aria-label="close">✕</button>
+          <span className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+            {props.actions}
+            <button className="x" onClick={props.onClose} aria-label="close">✕</button>
+          </span>
         </div>
         <div className={`window-body ${props.bodyClassName ?? ''}`}>{props.children}</div>
         {props.footer && <div className="window-foot">{props.footer}</div>}
@@ -47,6 +55,20 @@ export function Window(props: {
 
 export function Avatar({ look, size = 34, className }: { look: Look; size?: number; className?: string }) {
   return <img className={`pixelated ${className ?? ''}`} src={avatarUrl(look)} width={size} height={Math.round((size * 17) / 16)} alt="" />;
+}
+
+/** A person's profile picture, or their initial on a colored tile. */
+export function UserAvatar({ user, size = 28 }: { user: Pick<PublicUser, 'username' | 'avatarUrl'>; size?: number }) {
+  const [broken, setBroken] = useState(false);
+  if (user.avatarUrl && !broken) {
+    return <img className="user-avatar" src={assetUrl(user.avatarUrl)} width={size} height={size} alt="" onError={() => setBroken(true)} />;
+  }
+  const hue = [...user.username].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
+  return (
+    <span className="user-avatar initials" style={{ width: size, height: size, background: `hsl(${hue} 55% 55%)`, fontSize: size * 0.5 }}>
+      {user.username.slice(0, 1).toUpperCase()}
+    </span>
+  );
 }
 
 export function ProviderDot({ provider }: { provider: ProviderId }) {
@@ -83,7 +105,7 @@ export function Stars({ value }: { value: number }) {
   );
 }
 
-export function RoleLabel({ agent }: { agent: Agent }) {
+export function RoleLabel({ agent }: { agent: { role: RoleId; roleLabel?: string } }) {
   const t = useT();
   const r = roleById(agent.role);
   return (
@@ -101,4 +123,9 @@ export function ModelLabel({ modelId }: { modelId: string }) {
       <ProviderDot provider={m.provider} /> {m.name}
     </span>
   );
+}
+
+export function ScopeBadge({ scope }: { scope: 'personal' | 'shared' }) {
+  const t = useT();
+  return <span className={`chip scope-${scope}`}>{scope === 'shared' ? `👥 ${t('scope_shared')}` : `🔒 ${t('scope_personal')}`}</span>;
 }

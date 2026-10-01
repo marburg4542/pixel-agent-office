@@ -1,12 +1,13 @@
-import type { Agent, Lang, Note, Task } from '../types';
-import { uid } from '../util';
+import type { Agent, Lang, Note, Task } from '../shared/types';
+import { uid } from '../shared/util';
 
-export const NOTE_COLORS = ['#ffe680', '#ffb3c7', '#b3e5ff', '#c3f0b0', '#e0c8ff'];
+type NewTask = Partial<Task> & Pick<Task, 'title' | 'scope' | 'ownerId'>;
 
-export function makeTask(partial: Partial<Task> & Pick<Task, 'title'>): Task {
+export function makeTask(partial: NewTask): Task {
   const now = Date.now();
   return {
     id: uid(),
+    ownerName: '',
     description: '',
     priority: 'med',
     size: 'M',
@@ -24,11 +25,11 @@ export function makeTask(partial: Partial<Task> & Pick<Task, 'title'>): Task {
   };
 }
 
-/** Demo team so the office feels alive on first launch. */
-export function createSeed(lang: Lang): { agents: Agent[]; tasks: Task[]; notes: Note[] } {
+/** Starter team so a new office feels alive on first sign-in. */
+export function createSeed(lang: Lang, ownerId: number): { agents: Agent[]; tasks: Task[]; notes: Note[] } {
   const now = Date.now();
   const th = lang === 'th';
-  const agent = (a: Omit<Agent, 'id' | 'createdAt'>): Agent => ({ id: uid(), createdAt: now, ...a });
+  const agent = (a: Omit<Agent, 'id' | 'createdAt' | 'ownerId'>): Agent => ({ id: uid(), ownerId, createdAt: now, ...a });
 
   const nova = agent({
     name: 'Nova', role: 'planner', modelId: 'claude-opus-5', desk: 0,
@@ -57,36 +58,38 @@ export function createSeed(lang: Lang): { agents: Agent[]; tasks: Task[]; notes:
   });
   const agents = [nova, byte, pixel, quill, sage];
 
+  const base = { scope: 'personal' as const, ownerId };
   const landing = makeTask({
+    ...base,
     title: th ? 'ออกแบบหน้า Landing page ร้านกาแฟ' : 'Design the coffee shop landing page',
     description: th ? 'หน้าแรกของเว็บไซต์ ต้องมีเมนูแนะนำ รีวิวลูกค้า และปุ่มสั่งซื้อที่เห็นชัด' : 'Home page with featured menu, customer reviews and a prominent order button.',
     pipeline: [nova.id, pixel.id, sage.id], size: 'M', priority: 'high', column: 'todo',
   });
   const discount = makeTask({
+    ...base,
     title: th ? 'เขียนฟังก์ชันคำนวณส่วนลด' : 'Write the discount calculator',
     description: th ? 'รับราคาและโค้ดส่วนลด คืนราคาสุทธิ และจัดการโค้ดหมดอายุ' : 'Take a price and a coupon code, return the net price, handle expired codes.',
     pipeline: [byte.id, sage.id], size: 'S', priority: 'med', column: 'todo',
   });
   const article = makeTask({
+    ...base,
     title: th ? 'บทความรีวิวเมล็ดกาแฟ 3 ชนิด' : 'Review article: 3 coffee beans',
     description: th ? 'เปรียบเทียบรสชาติ ราคา และเหมาะกับใคร' : 'Compare flavor, price and who each bean suits.',
     pipeline: [quill.id, sage.id], size: 'M', priority: 'low', column: 'todo',
   });
   const campaign = makeTask({
+    ...base,
     title: th ? 'วางแผนแคมเปญโซเชียลเดือนหน้า' : "Plan next month's social campaign",
     description: th ? 'ธีม ตารางโพสต์ และไอเดียคอนเทนต์' : 'Theme, posting schedule and content ideas.',
     pipeline: [nova.id, quill.id], size: 'L', priority: 'med', column: 'backlog',
   });
 
+  const note = (n: Pick<Note, 'text' | 'to' | 'color'> & { taskId?: string }): Note => ({
+    id: uid(), scope: 'personal', createdBy: ownerId, createdByName: '', createdAt: now, readBy: [], ...n,
+  });
   const notes: Note[] = [
-    {
-      id: uid(), to: pixel.id, taskId: landing.id, color: 0, createdAt: now, readBy: [],
-      text: th ? 'ใช้โทนสีน้ำตาลอบอุ่นให้เข้ากับร้านกาแฟนะ ☕' : 'Use warm brown tones to match the coffee shop ☕',
-    },
-    {
-      id: uid(), to: 'all', color: 3, createdAt: now, readBy: [],
-      text: th ? 'ทุกคน: เขียนผลงานให้กระชับ อ่านง่าย 🙏' : 'Everyone: keep results short and easy to read 🙏',
-    },
+    note({ to: pixel.id, taskId: landing.id, color: 0, text: th ? 'ใช้โทนสีน้ำตาลอบอุ่นให้เข้ากับร้านกาแฟนะ ☕' : 'Use warm brown tones to match the coffee shop ☕' }),
+    note({ to: 'all', color: 3, text: th ? 'ทุกคน: เขียนผลงานให้กระชับ อ่านง่าย 🙏' : 'Everyone: keep results short and easy to read 🙏' }),
   ];
 
   return { agents, tasks: [landing, discount, article, campaign], notes };

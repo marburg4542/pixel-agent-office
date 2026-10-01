@@ -1,282 +1,462 @@
+// Client state: a mirror of the server's workspace for the signed-in user, kept fresh by SSE events.
+// Every change goes through the API; the server's reply (and its event) is the truth.
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import type {
-  Agent, ColumnId, FeedItem, Lang, LogParams, Modal, ModelDef, Note, StageOutput, Task,
+  Agent, AgentRuntime, ApiKeyStatus, ColumnId, FeedItem, Lang, LiveText, LogParams, Modal, ModelDef, Note, PublicUser, Task, TeamAgent, UsageSummary,
+  UserSettings, Watchlist, WatchSummary, Workspace,
 } from './types';
-import { DEFAULT_MODELS } from './data/models';
-import { createSeed, makeTask } from './data/seed';
-import { translate } from './i18n';
-import { uid } from './util';
+import { DEFAULT_SETTINGS } from '../shared/constants';
+import { isStepActive } from '../shared/pipeline';
+import { translate } from '../shared/i18n';
+import { API_BASE, api } from './lib/api';
+import { session } from './lib/session';
+import { configureSound } from './lib/sound';
+import { toast } from './lib/toast';
 
-const MAX_FEED = 60;
-const MAX_LOG = 80;
-export const MAX_DESKS = 8;
+export { MAX_DESKS } from '../shared/constants';
 
 interface Data {
-  lang: Lang;
+  user: PublicUser | null;
+  settings: UserSettings;
   agents: Agent[];
+  teamAgents: TeamAgent[];
   tasks: Task[];
   notes: Note[];
   models: ModelDef[];
   feed: FeedItem[];
-  simSpeed: number;
-  paused: boolean;
+  runtime: Record<string, AgentRuntime>;
+  keys: ApiKeyStatus[];
+  usage: UsageSummary;
+  /** Text a real model is writing right now, by "taskId:step". */
+  live: Record<string, LiveText>;
+  /** The room shown in the office (0 = first). */
+  room: number;
+  watchlists: Watchlist[];
+  watchSummaries: WatchSummary[];
+  /** serverTime − Date.now(), to extrapolate runtime values that carry server timestamps. */
+  clockOffset: number;
+  loaded: boolean;
 }
 
 interface Actions {
+  load: (ws: Workspace) => void;
+  reset: () => void;
+  setUser: (u: PublicUser) => void;
+  setRoom: (room: number) => void;
+
   setLang: (l: Lang) => void;
+  updateSettings: (patch: Partial<UserSettings>) => Promise<void>;
   togglePause: () => void;
   setSpeed: (n: number) => void;
 
   openModal: (m: Modal) => void;
   closeModal: () => void;
 
-  addAgent: (a: Omit<Agent, 'id' | 'createdAt'>) => string;
-  updateAgent: (id: string, patch: Partial<Agent>) => void;
-  removeAgent: (id: string) => void;
+  addAgent: (a: Partial<Agent>) => Promise<Agent>;
+  updateAgent: (id: string, patch: Partial<Agent>) => Promise<Agent>;
+  removeAgent: (id: string) => Promise<void>;
 
-  addTask: (t: Partial<Task> & Pick<Task, 'title'>) => string;
-  updateTask: (id: string, patch: Partial<Task>) => void;
-  deleteTask: (id: string) => void;
-  moveTask: (id: string, column: ColumnId) => void;
-  restartTask: (id: string) => void;
-  approveTask: (id: string) => void;
-  requestChanges: (id: string, agentId: string, text: string) => void;
+  addTask: (t: TaskPatch) => Promise<Task>;
+  updateTask: (id: string, patch: TaskPatch) => Promise<Task>;
+  deleteTask: (id: string) => Promise<void>;
+  moveTask: (id: string, column: ColumnId) => Promise<void>;
+  restartTask: (id: string) => Promise<void>;
+  approveTask: (id: string) => Promise<void>;
+  requestChanges: (id: string, agentId: string, text: string) => Promise<void>;
+  retryTask: (id: string) => Promise<void>;
+  answerQuestion: (id: string, text: string) => Promise<void>;
+  startArena: (id: string, stage: number, modelIds: string[], blind: boolean) => Promise<void>;
+  pickArena: (id: string, modelId: string, use: boolean) => Promise<void>;
+  closeArena: (id: string) => Promise<void>;
+  setKeys: (keys: ApiKeyStatus[]) => void;
+  refreshUsage: () => Promise<void>;
 
-  /** Simulation hooks — called by the engine. */
-  claimTask: (id: string, agentId: string) => void;
-  setTaskActive: (id: string, active: boolean) => void;
-  setTaskProgress: (id: string, p: number) => void;
-  completeStage: (id: string, output: StageOutput) => { next: string | null; column: ColumnId };
-  pushLog: (taskId: string, key: string, params?: LogParams) => void;
-  pushFeed: (key: string, params?: LogParams) => void;
+  saveWatchlist: (id: string | undefined, input: WatchlistInput) => Promise<Watchlist>;
+  deleteWatchlist: (id: string) => Promise<void>;
+  runWatchlist: (id: string) => Promise<void>;
 
-  addNote: (n: Omit<Note, 'id' | 'createdAt' | 'readBy'>) => void;
-  updateNote: (id: string, patch: Partial<Note>) => void;
-  deleteNote: (id: string) => void;
-  markNotesRead: (agentId: string, ids: string[]) => void;
+  addNote: (n: NoteInput) => Promise<Note>;
+  updateNote: (id: string, patch: NoteInput) => Promise<Note>;
+  deleteNote: (id: string) => Promise<void>;
 
-  addModel: (m: Omit<ModelDef, 'id'>) => void;
-  updateModel: (id: string, patch: Partial<ModelDef>) => void;
-  deleteModel: (id: string) => void;
-  resetModels: () => void;
+  addModel: (m: Partial<ModelDef>) => Promise<void>;
+  updateModel: (id: string, patch: ModelPatch) => Promise<void>;
+  deleteModel: (id: string) => Promise<void>;
+  resetModels: () => Promise<void>;
 
-  resetWorkspace: () => void;
+  /** Apply a server-sent event. */
+  applyEvent: (name: string, data: unknown) => void;
 }
 
 export type State = Data & { modals: Modal[] } & Actions;
 
-const initialLang: Lang = 'th';
+/** `null` prices clear them. */
+export type ModelPatch = Partial<Omit<ModelDef, 'priceIn' | 'priceOut'>> & { priceIn?: number | null; priceOut?: number | null };
 
-function withLog(t: Task, key: string, params?: LogParams): Task {
-  const log = [...t.log, { at: Date.now(), key, params }];
-  return { ...t, log: log.length > MAX_LOG ? log.slice(-MAX_LOG) : log, updatedAt: Date.now() };
+export type WatchlistInput = Partial<Pick<Watchlist, 'name' | 'scope' | 'research' | 'schedule' | 'agentId'>>;
+
+/** `research: null` removes the research from a task. */
+export type TaskPatch = Omit<Partial<Task>, 'research'> & { research?: Task['research'] | null };
+
+/** `taskId: null` unlinks a note from its task. */
+export type NoteInput = Partial<Omit<Note, 'taskId'>> & { taskId?: string | null };
+
+const empty = (): Data => ({
+  user: null,
+  settings: { ...DEFAULT_SETTINGS, lang: session.lang() },
+  agents: [],
+  teamAgents: [],
+  tasks: [],
+  notes: [],
+  models: [],
+  feed: [],
+  runtime: {},
+  keys: [],
+  usage: { month: '', costUsd: 0, tokensIn: 0, tokensOut: 0, calls: 0, byModel: [] },
+  live: {},
+  room: 0,
+  watchlists: [],
+  watchSummaries: [],
+  clockOffset: 0,
+  loaded: false,
+});
+
+// ─── Deletes with undo ───────────────────────────────────────────────────────
+// Deleting hides the item right away and shows an "Undo" toast; the server call happens a few
+// seconds later (or immediately if the page is closed).
+const UNDO_MS = 6500; // a little longer than the toast (6 s) so "Undo" is never too late
+const pendingDeletes = new Map<string, { timer: ReturnType<typeof setTimeout>; run: () => void }>();
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => {
+    for (const [, p] of pendingDeletes) {
+      clearTimeout(p.timer);
+      p.run();
+    }
+    pendingDeletes.clear();
+  });
 }
 
-export const useStore = create<State>()(
-  persist(
-    (set, get) => {
-      const patchTask = (id: string, fn: (t: Task) => Task) =>
-        set((s) => ({ tasks: s.tasks.map((t) => (t.id === id ? fn(t) : t)) }));
-      const agentName = (id: string) => get().agents.find((a) => a.id === id)?.name ?? '?';
-      const colName = (c: ColumnId) => translate(get().lang, `col_${c}`);
+function deleteWithUndo(opts: { id: string; path: string; label: string; hide: () => void; restore: () => void }) {
+  opts.hide();
+  const run = () => {
+    const token = session.token();
+    // keepalive lets the request finish even while the page is unloading.
+    void fetch(`${API_BASE}/api${opts.path}`, { method: 'DELETE', keepalive: true, headers: token ? { Authorization: `Bearer ${token}`, 'X-Lang': session.lang() } : {} })
+      .then((r) => {
+        if (!r.ok) opts.restore();
+      })
+      .catch(() => opts.restore());
+  };
+  const timer = setTimeout(() => {
+    pendingDeletes.delete(opts.id);
+    run();
+  }, UNDO_MS);
+  pendingDeletes.set(opts.id, { timer, run });
+  toast.withAction(opts.label, translate(session.lang(), 'undo'), () => {
+    clearTimeout(timer);
+    pendingDeletes.delete(opts.id);
+    opts.restore();
+  });
+}
 
-      return {
-        lang: initialLang,
-        ...createSeed(initialLang),
-        models: DEFAULT_MODELS,
-        feed: [],
-        simSpeed: 1,
-        paused: false,
-        modals: [],
+const upsert = <T extends { id: string }>(list: T[], item: T): T[] => {
+  const i = list.findIndex((x) => x.id === item.id);
+  if (i < 0) return [...list, item];
+  const next = list.slice();
+  next[i] = item;
+  return next;
+};
+const without = <T extends { id: string }>(list: T[], id: string) => list.filter((x) => x.id !== id);
 
-        setLang: (lang) => set({ lang }),
-        togglePause: () => set((s) => ({ paused: !s.paused })),
-        setSpeed: (simSpeed) => set({ simSpeed }),
+export const useStore = create<State>()((set, get) => {
+  const applySettings = (settings: UserSettings) => {
+    session.setLang(settings.lang);
+    configureSound({ enabled: settings.sound, volume: settings.volume });
+    set({ settings });
+  };
 
-        openModal: (m) => set((s) => ({ modals: [...s.modals, m] })),
-        closeModal: () => set((s) => ({ modals: s.modals.slice(0, -1) })),
+  return {
+    ...empty(),
+    modals: [],
 
-        addAgent: (a) => {
-          const agent: Agent = { ...a, id: uid(), createdAt: Date.now() };
-          set((s) => ({ agents: [...s.agents, agent] }));
-          get().pushFeed('feed_hired', { agent: agent.name });
-          return agent.id;
-        },
-        updateAgent: (id, patch) =>
-          set((s) => ({ agents: s.agents.map((a) => (a.id === id ? { ...a, ...patch } : a)) })),
-        removeAgent: (id) =>
-          set((s) => ({
-            agents: s.agents.filter((a) => a.id !== id),
-            tasks: s.tasks.map((t) => {
-              if (!t.pipeline.includes(id)) return t;
-              const idx = t.pipeline.indexOf(id);
-              const pipeline = t.pipeline.filter((x) => x !== id);
-              let stage = t.stage;
-              let stageProgress = t.stageProgress;
-              if (idx < t.stage) stage -= 1;
-              else if (idx === t.stage) stageProgress = 0;
-              return { ...t, pipeline, stage: Math.min(stage, pipeline.length), stageProgress, active: false };
-            }),
-            notes: s.notes
-              .filter((n) => n.to !== id)
-              .map((n) => ({ ...n, readBy: n.readBy.filter((r) => r !== id) })),
-          })),
-
-        addTask: (partial) => {
-          const task = makeTask(partial);
-          set((s) => ({ tasks: [...s.tasks, task] }));
-          return task.id;
-        },
-        updateTask: (id, patch) =>
-          patchTask(id, (t) => {
-            const next = { ...t, ...patch, updatedAt: Date.now() };
-            if (patch.pipeline) {
-              next.stage = Math.min(next.stage, next.pipeline.length);
-              if (next.pipeline[next.stage] !== t.pipeline[t.stage]) {
-                next.active = false;
-                next.stageProgress = 0;
-              }
-            }
-            return next;
-          }),
-        deleteTask: (id) =>
-          set((s) => ({
-            tasks: s.tasks.filter((t) => t.id !== id),
-            notes: s.notes.map((n) => (n.taskId === id ? { ...n, taskId: undefined } : n)),
-          })),
-        moveTask: (id, column) =>
-          patchTask(id, (t) => {
-            if (t.column === column) return t;
-            let next: Task = { ...t, column, active: false };
-            if ((column === 'todo' || column === 'doing') && t.stage >= t.pipeline.length) {
-              next = withLog({ ...next, stage: 0, stageProgress: 0 }, 'log_restarted');
-            }
-            if (column === 'done') next.doneAt = Date.now();
-            return withLog(next, 'log_moved', { col: colName(column) });
-          }),
-        restartTask: (id) =>
-          patchTask(id, (t) =>
-            withLog({ ...t, stage: 0, stageProgress: 0, active: false, column: 'todo', doneAt: undefined }, 'log_restarted'),
-          ),
-        approveTask: (id) => {
-          const t = get().tasks.find((x) => x.id === id);
-          patchTask(id, (x) => withLog({ ...x, column: 'done', active: false, doneAt: Date.now() }, 'log_approved'));
-          if (t) get().pushFeed('feed_done', { task: t.title });
-        },
-        requestChanges: (id, agentId, text) => {
-          const t = get().tasks.find((x) => x.id === id);
-          if (!t) return;
-          const stage = Math.max(0, t.pipeline.indexOf(agentId));
-          get().addNote({ text, to: agentId, taskId: id, color: 1 });
-          patchTask(id, (x) =>
-            withLog(
-              { ...x, stage, stageProgress: 0, active: false, column: 'todo', doneAt: undefined },
-              'log_changes',
-              { agent: agentName(agentId), text },
-            ),
-          );
-          get().pushFeed('feed_changes', { task: t.title });
-        },
-
-        claimTask: (id, agentId) => {
-          const t = get().tasks.find((x) => x.id === id);
-          patchTask(id, (x) => withLog({ ...x, column: 'doing' }, 'log_picked', { agent: agentName(agentId) }));
-          if (t) get().pushFeed('feed_picked', { agent: agentName(agentId), task: t.title });
-        },
-        setTaskActive: (id, active) => patchTask(id, (t) => ({ ...t, active })),
-        setTaskProgress: (id, p) => patchTask(id, (t) => ({ ...t, stageProgress: p })),
-        completeStage: (id, output) => {
-          const t = get().tasks.find((x) => x.id === id);
-          if (!t) return { next: null, column: 'done' };
-          const nextStage = t.stage + 1;
-          const hasNext = nextStage < t.pipeline.length;
-          const column: ColumnId = hasNext ? 'doing' : t.requireReview ? 'review' : 'done';
-          patchTask(id, (x) => {
-            let n: Task = {
-              ...x,
-              outputs: [...x.outputs, output],
-              stage: nextStage,
-              stageProgress: 0,
-              active: false,
-              column,
-              doneAt: column === 'done' ? Date.now() : x.doneAt,
-            };
-            n = withLog(n, 'log_stageDone', { agent: output.agentName, n: output.stage + 1, model: output.modelName });
-            if (hasNext) n = withLog(n, 'log_handoff', { agent: output.agentName, next: agentName(x.pipeline[nextStage]) });
-            else n = withLog(n, column === 'review' ? 'log_toReview' : 'log_done');
-            return n;
-          });
-          return { next: hasNext ? t.pipeline[nextStage] : null, column };
-        },
-        pushLog: (taskId, key, params) => patchTask(taskId, (t) => withLog(t, key, params)),
-        pushFeed: (key, params) =>
-          set((s) => ({ feed: [{ id: uid(), at: Date.now(), key, params }, ...s.feed].slice(0, MAX_FEED) })),
-
-        addNote: (n) => set((s) => ({ notes: [...s.notes, { ...n, id: uid(), createdAt: Date.now(), readBy: [] }] })),
-        updateNote: (id, patch) =>
-          set((s) => ({
-            notes: s.notes.map((n) => {
-              if (n.id !== id) return n;
-              const changed = patch.text !== undefined && patch.text !== n.text;
-              const retarget = patch.to !== undefined && patch.to !== n.to;
-              // An edited note must be re-read.
-              return { ...n, ...patch, readBy: changed || retarget ? [] : n.readBy };
-            }),
-          })),
-        deleteNote: (id) => set((s) => ({ notes: s.notes.filter((n) => n.id !== id) })),
-        markNotesRead: (agentId, ids) =>
-          set((s) => ({
-            notes: s.notes.map((n) =>
-              ids.includes(n.id) && !n.readBy.includes(agentId) ? { ...n, readBy: [...n.readBy, agentId] } : n,
-            ),
-          })),
-
-        addModel: (m) => set((s) => ({ models: [...s.models, { ...m, id: uid(), custom: true }] })),
-        updateModel: (id, patch) =>
-          set((s) => ({ models: s.models.map((m) => (m.id === id ? { ...m, ...patch } : m)) })),
-        deleteModel: (id) => set((s) => ({ models: s.models.filter((m) => m.id !== id) })),
-        resetModels: () =>
-          set((s) => {
-            // Keep custom models that agents still use so nobody ends up without a model.
-            const used = new Set(s.agents.map((a) => a.modelId));
-            const keep = s.models.filter((m) => m.custom && used.has(m.id));
-            return { models: [...DEFAULT_MODELS, ...keep] };
-          }),
-
-        resetWorkspace: () =>
-          set((s) => ({ ...createSeed(s.lang), models: DEFAULT_MODELS, feed: [], modals: [], paused: false })),
-      };
+    load: (ws) => {
+      applySettings(ws.settings);
+      set({
+        user: ws.user,
+        agents: ws.agents,
+        teamAgents: ws.teamAgents,
+        tasks: ws.tasks,
+        notes: ws.notes,
+        models: ws.models,
+        feed: ws.feed,
+        runtime: Object.fromEntries(ws.runtime.map((r) => [r.agentId, r])),
+        keys: ws.keys,
+        usage: ws.usage,
+        live: ws.live ?? {},
+        watchlists: ws.watchlists ?? [],
+        watchSummaries: ws.watchSummaries ?? [],
+        clockOffset: ws.serverTime - Date.now(),
+        loaded: true,
+      });
     },
-    {
-      name: 'pixel-agent-office-v1',
-      version: 1,
-      partialize: (s): Data => ({
-        lang: s.lang,
-        agents: s.agents,
-        tasks: s.tasks,
-        notes: s.notes,
-        models: s.models,
-        feed: s.feed,
-        simSpeed: s.simSpeed,
-        paused: s.paused,
-      }),
-      merge: (persisted, current) => {
-        const p = (persisted ?? {}) as Partial<Data>;
-        return {
-          ...current,
-          ...p,
-          // Nobody is mid-keystroke after a reload; agents re-pick their work.
-          tasks: (p.tasks ?? current.tasks).map((t) => ({ ...t, active: false })),
-        };
-      },
+    reset: () => set({ ...empty(), modals: [] }),
+    setUser: (user) => set({ user }),
+    setRoom: (room) => set({ room }),
+
+    setLang: (lang) => {
+      session.setLang(lang);
+      set({ settings: { ...get().settings, lang } });
+      if (get().user) void get().updateSettings({ lang });
     },
-  ),
-);
+    updateSettings: async (patch) => {
+      applySettings({ ...get().settings, ...patch }); // optimistic
+      applySettings(await api<UserSettings>('/settings', { method: 'PUT', body: patch }));
+    },
+    togglePause: () => void get().updateSettings({ paused: !get().settings.paused }),
+    setSpeed: (simSpeed) => void get().updateSettings({ simSpeed }),
+
+    openModal: (m) => set((s) => ({ modals: [...s.modals, m] })),
+    closeModal: () => set((s) => ({ modals: s.modals.slice(0, -1) })),
+
+    addAgent: async (a) => {
+      const agent = await api<Agent>('/agents', { method: 'POST', body: a });
+      set((s) => ({ agents: upsert(s.agents, agent) }));
+      return agent;
+    },
+    updateAgent: async (id, patch) => {
+      const agent = await api<Agent>(`/agents/${id}`, { method: 'PUT', body: patch });
+      set((s) => ({ agents: upsert(s.agents, agent) }));
+      return agent;
+    },
+    removeAgent: async (id) => {
+      await api(`/agents/${id}`, { method: 'DELETE' });
+      set((s) => ({ agents: without(s.agents, id) }));
+    },
+
+    addTask: async (t) => {
+      const task = await api<Task>('/tasks', { method: 'POST', body: t });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+      return task;
+    },
+    updateTask: async (id, patch) => {
+      const task = await api<Task>(`/tasks/${id}`, { method: 'PUT', body: patch });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+      return task;
+    },
+    deleteTask: async (id) => {
+      const task = get().tasks.find((t) => t.id === id);
+      if (!task) return;
+      deleteWithUndo({
+        id,
+        path: `/tasks/${id}`,
+        label: translate(get().settings.lang, 'deletedTask', { title: task.title }),
+        hide: () => set((s) => ({ tasks: without(s.tasks, id) })),
+        restore: () => set((s) => ({ tasks: upsert(s.tasks, task) })),
+      });
+    },
+    moveTask: async (id, column) => {
+      const before = get().tasks.find((t) => t.id === id);
+      if (!before || before.column === column) return;
+      set((s) => ({ tasks: upsert(s.tasks, { ...before, column, active: false }) })); // snappy drag & drop
+      try {
+        const task = await api<Task>(`/tasks/${id}/move`, { method: 'POST', body: { column } });
+        set((s) => ({ tasks: upsert(s.tasks, task) }));
+      } catch {
+        set((s) => ({ tasks: upsert(s.tasks, before) }));
+      }
+    },
+    restartTask: async (id) => {
+      const task = await api<Task>(`/tasks/${id}/restart`, { method: 'POST' });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+    },
+    approveTask: async (id) => {
+      const task = await api<Task>(`/tasks/${id}/approve`, { method: 'POST' });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+    },
+    requestChanges: async (id, agentId, text) => {
+      const task = await api<Task>(`/tasks/${id}/request-changes`, { method: 'POST', body: { agentId, text } });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+    },
+    retryTask: async (id) => {
+      const task = await api<Task>(`/tasks/${id}/retry`, { method: 'POST' });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+    },
+    answerQuestion: async (id, text) => {
+      const task = await api<Task>(`/tasks/${id}/answer`, { method: 'POST', body: { text } });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+    },
+    startArena: async (id, stage, modelIds, blind) => {
+      const task = await api<Task>(`/tasks/${id}/arena`, { method: 'POST', body: { stage, modelIds, blind } });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+    },
+    pickArena: async (id, modelId, use) => {
+      const task = await api<Task>(`/tasks/${id}/arena/pick`, { method: 'POST', body: { modelId, use } });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+    },
+    closeArena: async (id) => {
+      const task = await api<Task>(`/tasks/${id}/arena`, { method: 'DELETE' });
+      set((s) => ({ tasks: upsert(s.tasks, task) }));
+    },
+    setKeys: (keys) => set({ keys }),
+    refreshUsage: async () => set({ usage: await api<UsageSummary>('/usage') }),
+
+    saveWatchlist: async (id, input) => {
+      const w = await api<Watchlist>(id ? `/watchlists/${id}` : '/watchlists', { method: id ? 'PUT' : 'POST', body: input });
+      set((s) => ({ watchlists: upsert(s.watchlists, w) }));
+      return w;
+    },
+    deleteWatchlist: async (id) => {
+      await api(`/watchlists/${id}`, { method: 'DELETE' });
+      set((s) => ({ watchlists: without(s.watchlists, id), watchSummaries: s.watchSummaries.filter((x) => x.watchlistId !== id) }));
+    },
+    runWatchlist: async (id) => {
+      const w = await api<Watchlist>(`/watchlists/${id}/run`, { method: 'POST' });
+      set((s) => ({ watchlists: upsert(s.watchlists, w) }));
+    },
+
+    addNote: async (n) => {
+      const note = await api<Note>('/notes', { method: 'POST', body: n });
+      set((s) => ({ notes: upsert(s.notes, note) }));
+      return note;
+    },
+    updateNote: async (id, patch) => {
+      const note = await api<Note>(`/notes/${id}`, { method: 'PUT', body: patch });
+      set((s) => ({ notes: upsert(s.notes, note) }));
+      return note;
+    },
+    deleteNote: async (id) => {
+      const note = get().notes.find((n) => n.id === id);
+      if (!note) return;
+      deleteWithUndo({
+        id,
+        path: `/notes/${id}`,
+        label: translate(get().settings.lang, 'deletedNote'),
+        hide: () => set((s) => ({ notes: without(s.notes, id) })),
+        restore: () => set((s) => ({ notes: upsert(s.notes, note) })),
+      });
+    },
+
+    addModel: async (m) => set({ models: await api<ModelDef[]>('/models', { method: 'POST', body: m }) }),
+    updateModel: async (id, patch) => set({ models: await api<ModelDef[]>(`/models/${id}`, { method: 'PUT', body: patch }) }),
+    deleteModel: async (id) => set({ models: await api<ModelDef[]>(`/models/${id}`, { method: 'DELETE' }) }),
+    resetModels: async () => set({ models: await api<ModelDef[]>('/models/reset', { method: 'POST' }) }),
+
+    applyEvent: (name, data) => {
+      const s = get();
+      // Don't let live updates resurrect something waiting to be deleted.
+      if ((name === 'task' || name === 'note') && pendingDeletes.has((data as { id: string }).id)) return;
+      switch (name) {
+        case 'task': {
+          const t = data as Task;
+          // The streamed text is replaced by the stored result once its step ends.
+          const stale = Object.keys(s.live).filter((k) => k.startsWith(`${t.id}:`) && !isStepActive(t, Number(k.slice(t.id.length + 1))));
+          if (stale.length) {
+            const live = { ...s.live };
+            for (const k of stale) delete live[k];
+            set({ tasks: upsert(s.tasks, t), live });
+          } else set({ tasks: upsert(s.tasks, t) });
+          break;
+        }
+        case 'task-stream': {
+          const l = data as LiveText & { id: string };
+          set({ live: { ...s.live, [`${l.id}:${l.stage}`]: { stage: l.stage, text: l.text, agentId: l.agentId } } });
+          break;
+        }
+        case 'keys-changed':
+          set({ keys: data as ApiKeyStatus[] });
+          break;
+        case 'watchlist':
+          set({ watchlists: upsert(s.watchlists, data as Watchlist) });
+          break;
+        case 'watchlist-deleted': {
+          const id = (data as { id: string }).id;
+          set({ watchlists: without(s.watchlists, id), watchSummaries: s.watchSummaries.filter((x) => x.watchlistId !== id) });
+          break;
+        }
+        case 'watch-report': {
+          const { summary } = data as { summary?: WatchSummary };
+          if (summary) set({ watchSummaries: [...s.watchSummaries.filter((x) => x.watchlistId !== summary.watchlistId), summary] });
+          break;
+        }
+        case 'usage-changed':
+          void get().refreshUsage().catch(() => {});
+          break;
+        case 'task-deleted':
+          set({ tasks: without(s.tasks, (data as { id: string }).id) });
+          break;
+        case 'task-progress': {
+          const p = data as { id: string; stageProgress: number; active: boolean; stepProgress?: Record<number, number> };
+          const t = s.tasks.find((x) => x.id === p.id);
+          if (t) set({ tasks: upsert(s.tasks, { ...t, stageProgress: p.stageProgress, active: p.active, stepProgress: p.stepProgress ?? t.stepProgress }) });
+          break;
+        }
+        case 'note':
+          set({ notes: upsert(s.notes, data as Note) });
+          break;
+        case 'note-deleted':
+          set({ notes: without(s.notes, (data as { id: string }).id) });
+          break;
+        case 'agent':
+          set({ agents: upsert(s.agents, data as Agent) });
+          break;
+        case 'team-agent':
+          set({ teamAgents: upsert(s.teamAgents, data as TeamAgent) });
+          break;
+        case 'agent-deleted': {
+          const id = (data as { id: string }).id;
+          set({ agents: without(s.agents, id), teamAgents: without(s.teamAgents, id) });
+          break;
+        }
+        case 'models':
+          set({ models: data as ModelDef[] });
+          break;
+        case 'settings':
+          applySettings(data as UserSettings);
+          break;
+        case 'feed':
+          set({ feed: [data as FeedItem, ...s.feed].slice(0, 60) });
+          break;
+        case 'runtime': {
+          const r = data as AgentRuntime;
+          set({ runtime: { ...s.runtime, [r.agentId]: r } });
+          break;
+        }
+      }
+    },
+  };
+});
 
 export const useT = () => {
-  const lang = useStore((s) => s.lang);
+  const lang = useStore((s) => s.settings.lang);
   return (key: string, params?: LogParams) => translate(lang, key, params);
 };
 
+export const useLang = () => useStore((s) => s.settings.lang);
+
 export const modelById = (models: ModelDef[], id: string): ModelDef | undefined => models.find((m) => m.id === id);
+
+/** An agent anywhere on the team (mine or someone else's), for pipelines and note recipients. */
+export type AnyAgent = (Agent & { mine: true; ownerName?: string }) | (TeamAgent & { mine: false });
+
+/** Both agent lists, selected separately so the selectors stay referentially stable. */
+export function useTeam(): Pick<State, 'agents' | 'teamAgents'> {
+  const agents = useStore((s) => s.agents);
+  const teamAgents = useStore((s) => s.teamAgents);
+  return { agents, teamAgents };
+}
+
+export const findAnyAgent = (s: Pick<State, 'agents' | 'teamAgents'>, id: string): AnyAgent | undefined => {
+  const a = s.agents.find((x) => x.id === id);
+  if (a) return { ...a, mine: true };
+  const t = s.teamAgents.find((x) => x.id === id);
+  return t ? { ...t, mine: false } : undefined;
+};
+
+/** Current extrapolated value (progress 0–100 or trip fraction 0–1) of an agent's runtime. */
+export const runtimeValue = (r: AgentRuntime | undefined, clockOffset: number): number => {
+  if (!r) return 0;
+  const elapsed = (Date.now() + clockOffset - r.at) / 1000;
+  const v = r.value + r.rate * Math.max(0, elapsed);
+  return r.status === 'trip' ? Math.min(1, v) : Math.min(99.9, v);
+};

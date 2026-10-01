@@ -1,6 +1,6 @@
 import { useStore, useT } from '../store';
 import { engine } from '../sim/engine';
-import { roleById } from '../data/roles';
+import { roleById } from '../../shared/roles';
 import { clockTime } from '../util';
 import { ModelLabel, Progress, RoleLabel, Stars, useTicker, Window } from './ui';
 import { SpritePreview } from './SpritePreview';
@@ -14,7 +14,7 @@ export function AgentDetail({ z, onClose, agentId }: { z: number; onClose: () =>
 
   if (!agent) return null;
   const rt = engine.agents.get(agent.id);
-  const current = rt?.work ? tasks.find((x) => x.id === rt.work!.taskId) : undefined;
+  const current = rt?.status === 'working' ? tasks.find((x) => x.id === rt.taskId) : undefined;
   const queue = engine.queueFor(agent.id);
   const unread = engine.unreadNotes(agent.id);
   const recent = tasks
@@ -37,10 +37,7 @@ export function AgentDetail({ z, onClose, agentId }: { z: number; onClose: () =>
               onClick={() =>
                 openModal({
                   kind: 'confirm', danger: true, message: t('fireConfirm', { name: agent.name }),
-                  onYes: () => {
-                    removeAgent(agent.id);
-                    onClose();
-                  },
+                  onYes: () => void removeAgent(agent.id).then(onClose, () => {}),
                 })
               }
             >
@@ -68,12 +65,12 @@ export function AgentDetail({ z, onClose, agentId }: { z: number; onClose: () =>
 
       <div className="section-title">⚙ {t('currentTask')}</div>
       <div className="list-box">
-        {current && rt?.work ? (
+        {current && rt ? (
           <div className="li" onClick={() => openModal({ kind: 'task', taskId: current.id })}>
-            <div style={{ fontWeight: 700 }}>{current.title}</div>
+            <div style={{ fontWeight: 700 }}>{current.scope === 'shared' && '👥 '}{current.title}</div>
             <div className="row" style={{ gap: 8 }}>
-              <div style={{ flex: 1 }}><Progress value={rt.work.progress} color={roleById(agent.role).color} /></div>
-              <strong>{Math.floor(rt.work.progress)}%</strong>
+              <div style={{ flex: 1 }}><Progress value={rt.progress} color={roleById(agent.role).color} /></div>
+              <strong>{Math.floor(rt.progress)}%</strong>
             </div>
           </div>
         ) : (

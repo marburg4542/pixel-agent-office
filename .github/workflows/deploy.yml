@@ -1,8 +1,9 @@
 name: Deploy to GitHub Pages
 
+# Manual only for now: v2 needs its server, which runs at https://office.personal-proj.online
+# (Cloudflare Tunnel). The last deployed page (the v1 demo) stays up on github.io until then.
+# To deploy again, use "Run workflow" in the Actions tab, or add back `push: branches: [main]`.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

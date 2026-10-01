@@ -1,7 +1,7 @@
 import { useStore, useT } from '../store';
 import { engine, type AgentStatus } from '../sim/engine';
-import { roleById } from '../data/roles';
-import { translate } from '../i18n';
+import { roleById } from '../../shared/roles';
+import { translate } from '../../shared/i18n';
 import { timeAgo } from '../util';
 import { Avatar, Progress, useTicker } from './ui';
 
@@ -29,15 +29,15 @@ function TeamPanel() {
   const openModal = useStore((s) => s.openModal);
   useTicker(250);
 
-  const sorted = [...agents].sort((a, b) => a.desk - b.desk);
+  const sorted = [...agents].sort((a, b) => (a.room ?? 0) - (b.room ?? 0) || a.desk - b.desk);
   return (
     <section className="side-panel team">
       <h3>👥 {t('team')} <span className="hint" style={{ color: '#c9bfd9' }}>{agents.length}</span></h3>
       <div className="side-scroll">
         {sorted.map((a) => {
-          const rt = engine.agents.get(a.id);
-          const status: AgentStatus = rt?.status ?? 'idle';
-          const task = rt?.work ? tasks.find((x) => x.id === rt.work!.taskId) : undefined;
+          const va = engine.agents.get(a.id);
+          const status: AgentStatus = va?.status ?? 'idle';
+          const task = va?.status === 'working' ? tasks.find((x) => x.id === va.taskId) : undefined;
           const queue = engine.queueFor(a.id).length;
           const unread = engine.unreadNotes(a.id).length;
           const model = models.find((m) => m.id === a.modelId);
@@ -54,10 +54,13 @@ function TeamPanel() {
                 <div className="team-meta">
                   <span className="status-dot" style={{ background: STATUS_COLOR[status] }} /> {t(`st_${status}`)} · {model?.name ?? a.modelId}
                 </div>
-                {task && rt?.work && (
+                {task && va && (
                   <>
-                    <div className="team-meta" title={task.title}>{task.title}</div>
-                    <Progress value={rt.work.progress} color={roleById(a.role).color} thin />
+                    <div className="team-meta" title={task.title}>
+                      {task.scope === 'shared' && '👥 '}
+                      {task.title}
+                    </div>
+                    <Progress value={va.progress} color={roleById(a.role).color} thin />
                   </>
                 )}
               </div>
@@ -71,7 +74,7 @@ function TeamPanel() {
 
 function ActivityFeed() {
   const t = useT();
-  const lang = useStore((s) => s.lang);
+  const lang = useStore((s) => s.settings.lang);
   const feed = useStore((s) => s.feed);
   useTicker(10000);
   return (

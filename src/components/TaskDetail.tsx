@@ -1,45 +1,79 @@
 import { useEffect, useState } from 'react';
-import { useStore, useT } from '../store';
+import { findAnyAgent, useStore, useT, useTeam } from '../store';
 import { engine } from '../sim/engine';
-import { translate } from '../i18n';
-import { clockTime } from '../util';
+import { translate } from '../../shared/i18n';
+import { COLUMNS, NOTE_COLORS } from '../../shared/constants';
+import { clockTime, timeLeft, tokenCount, usd } from '../util';
+import { copyText, downloadText, slug } from '../lib/files';
+import type { ColumnId, Lang, Task } from '../types';
+import { Markdown } from './Markdown';
+import { ResearchView } from './ResearchView';
+import { ArenaSetup, ArenaView, QaHistory, QuestionBox } from './Collab';
+import { currentSteps, groupRange, isStepActive, isStepDone } from '../../shared/pipeline';
+
+/** All step results as one Markdown document. */
+function resultsMarkdown(task: Task, lang: Lang): string {
+  const parts = [`# ${task.title}`, task.description].filter(Boolean);
+  for (let i = 0; i < task.pipeline.length; i++) {
+    const out = [...task.outputs].reverse().find((o) => o.stage === i);
+    if (!out) continue;
+    parts.push(`## ${translate(lang, 'stage')} ${i + 1} — ${out.agentName} (${out.modelName})`, out.text);
+  }
+  return parts.join('\n\n') + '\n';
+}
 import { COLUMN_COLORS, PRIORITY_COLORS } from '../scene/office';
-import { NOTE_COLORS } from '../data/seed';
 import { overallProgress } from '../data/board';
+import { play } from '../lib/sound';
 import { PipelineView } from './BoardModal';
-import { Avatar, ModelLabel, Progress, RoleLabel, Stars, Window } from './ui';
+import { Avatar, ModelLabel, Progress, RoleLabel, ScopeBadge, Stars, Window } from './ui';
+import { PixelIcon } from './PixelIcon';
 
 export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => void; taskId: string }) {
   const t = useT();
-  const lang = useStore((s) => s.lang);
+  const lang = useStore((s) => s.settings.lang);
   const task = useStore((s) => s.tasks.find((x) => x.id === taskId));
-  const agents = useStore((s) => s.agents);
+  const me = useStore((s) => s.user!);
+  const team = useTeam();
   const allNotes = useStore((s) => s.notes);
-  const notes = allNotes.filter((n) => n.taskId === taskId);
-  const { openModal, approveTask, requestChanges, restartTask } = useStore.getState();
+  const liveAll = useStore((s) => s.live);
+  const { openModal, approveTask, requestChanges, restartTask, moveTask, retryTask } = useStore.getState();
   const [fbOpen, setFbOpen] = useState(false);
   const [fbText, setFbText] = useState('');
   const [fbAgent, setFbAgent] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [arenaFor, setArenaFor] = useState<number | null>(null);
 
-  // Deleted while open (e.g. from the editor on top of us): close ourselves.
+  // Deleted while open (e.g. from the editor on top of us or by a teammate): close ourselves.
   useEffect(() => {
     if (!task) onClose();
   }, [task, onClose]);
 
   if (!task) return null;
+  const notes = allNotes.filter((n) => n.taskId === taskId);
   const lastAgent = task.pipeline[task.pipeline.length - 1];
+
+  const act = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await fn();
+    } catch {
+      /* shown by api() */
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <Window
       z={z}
-      width={760}
-      title={`📄 ${task.title}`}
+      width={780}
+      title={<><PixelIcon name="task" /> {task.title}</>}
       onClose={onClose}
       footer={
         <>
           <div className="left">
             <button className="btn" onClick={() => openModal({ kind: 'taskEdit', taskId })}>✏️ {t('edit')}</button>
-            <button className="btn" onClick={() => restartTask(taskId)}>↺ {t('restart')}</button>
+            <button className="btn" disabled={busy} onClick={() => void act(() => restartTask(taskId))}>↺ {t('restart')}</button>
           </div>
           <button className="btn" onClick={onClose}>{t('close')}</button>
         </>
@@ -47,19 +81,33 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
     >
       <div className="row" style={{ marginBottom: 8 }}>
         <span className="chip" style={{ background: COLUMN_COLORS[task.column], color: '#fff' }}>{t(`col_${task.column}`)}</span>
+        <ScopeBadge scope={task.scope} />
         <span className="chip" style={{ background: PRIORITY_COLORS[task.priority] }}>{t('priority')}: {t(`prio_${task.priority}`)}</span>
         <span className="chip">{t('size')}: {t(`size_${task.size}`)}</span>
+        {task.ownerId !== me.id && <span className="chip">👤 {task.ownerName}</span>}
         <span className="hint" style={{ marginLeft: 'auto' }}>{t('created')} {new Date(task.createdAt).toLocaleString(lang === 'th' ? 'th-TH' : 'en-US')}</span>
+        <label className="row" style={{ gap: 4 }}>
+          <span className="hint">{t('moveTo')}</span>
+          <select className="select" style={{ width: 'auto', padding: '2px 6px' }} value={task.column} onChange={(e) => void moveTask(taskId, e.target.value as ColumnId)}>
+            {COLUMNS.map((c) => (
+              <option key={c} value={c}>{t(`col_${c}`)}</option>
+            ))}
+          </select>
+        </label>
       </div>
       {task.description && <p style={{ margin: '4px 0 12px', whiteSpace: 'pre-wrap' }}>{task.description}</p>}
 
       <div className="row" style={{ marginBottom: 6 }}>
-        <PipelineView task={task} agents={agents} size={32} />
+        <PipelineView task={task} size={32} />
         <div style={{ flex: 1, minWidth: 160 }}>
           <div className="hint">{t('overall')} {Math.floor(overallProgress(task))}%</div>
           <Progress value={overallProgress(task)} color={task.column === 'done' ? '#3fae6a' : '#f0a030'} />
         </div>
       </div>
+
+      {task.question && <QuestionBox task={task} />}
+      {(task.autoRevisions ?? 0) > 0 && <div className="hint" style={{ marginTop: 6 }}>🔁 {t('autoRevisedTimes', { n: task.autoRevisions ?? 0 })}</div>}
+      {task.blocked && <BlockedBox task={task} busy={busy} onRetry={() => void act(() => retryTask(taskId))} />}
 
       {task.column === 'review' && (
         <div className="review-box">
@@ -68,10 +116,14 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
             <span style={{ marginLeft: 'auto' }} />
             <button
               className="btn success"
-              onClick={() => {
-                approveTask(taskId);
-                engine.cheer(task.pipeline);
-              }}
+              disabled={busy}
+              onClick={() =>
+                void act(async () => {
+                  await approveTask(taskId);
+                  engine.cheer(task.pipeline);
+                  play('approve');
+                })
+              }
             >
               ✔ {t('approve')}
             </button>
@@ -95,17 +147,19 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
                 <span className="field-label">{t('sendBackTo')}</span>
                 <select className="select" style={{ width: 'auto' }} value={fbAgent} onChange={(e) => setFbAgent(e.target.value)}>
                   {task.pipeline.map((id, i) => (
-                    <option key={`${id}-${i}`} value={id}>{i + 1}. {agents.find((a) => a.id === id)?.name ?? '?'}</option>
+                    <option key={`${id}-${i}`} value={id}>{i + 1}. {findAnyAgent(team, id)?.name ?? '?'}</option>
                   ))}
                 </select>
                 <button
                   className="btn primary"
-                  disabled={!fbText.trim() || !fbAgent}
-                  onClick={() => {
-                    requestChanges(taskId, fbAgent, fbText.trim());
-                    setFbOpen(false);
-                    setFbText('');
-                  }}
+                  disabled={!fbText.trim() || !fbAgent || busy}
+                  onClick={() =>
+                    void act(async () => {
+                      await requestChanges(taskId, fbAgent, fbText.trim());
+                      setFbOpen(false);
+                      setFbText('');
+                    })
+                  }
                 >
                   📨 {t('requestChanges')}
                 </button>
@@ -115,51 +169,99 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
         </div>
       )}
 
-      <div className="section-title">🧾 {t('outputs')}</div>
+      <QaHistory task={task} />
+
+      <div className="section-title">
+        🧾 {t('outputs')}
+        {task.outputs.length > 0 && (
+          <button className="btn sm" style={{ marginLeft: 'auto' }} onClick={() => downloadText(`${slug(task.title)}.md`, resultsMarkdown(task, lang))}>
+            ⬇ {t('downloadAll')}
+          </button>
+        )}
+      </div>
       <div className="stage-list">
         {task.pipeline.length === 0 && <div className="hint">⚠ {t('unassigned')}</div>}
         {task.pipeline.map((id, i) => {
-          const a = agents.find((x) => x.id === id);
+          const a = findAnyAgent(team, id);
           const out = [...task.outputs].reverse().find((o) => o.stage === i);
-          const isCurrent = i === task.stage && task.column !== 'done';
+          const group = currentSteps(task);
+          const isCurrent = group.includes(i) && task.column !== 'done';
+          const working = isCurrent && isStepActive(task, i);
+          const progress = group.length > 1 ? (task.stepProgress?.[i] ?? 0) : task.stageProgress;
+          const live = liveAll[`${taskId}:${i}`];
+          const liveHere = working && !!live;
+          const [gStart, gEnd] = groupRange(task, i);
+          const parallel = gEnd - gStart > 1;
           let state: string;
-          if (i < task.stage || (task.stage >= task.pipeline.length)) state = '✅';
-          else if (isCurrent && task.active) state = `⚙ ${Math.floor(task.stageProgress)}%`;
+          if (isStepDone(task, i) || task.stage >= task.pipeline.length) state = '✅';
+          else if (working) state = `⚙ ${Math.floor(progress)}%`;
           else if (isCurrent) state = '⏳';
           else state = '·';
           return (
-            <div className="stage-item" key={`${id}-${i}`}>
+            <div className={`stage-item ${parallel ? 'parallel' : ''} ${parallel && i === gStart ? 'group-start' : ''}`} key={`${id}-${i}`}>
               <div className="stage-head">
                 <strong>{t('stage')} {i + 1}</strong>
+                {parallel && <span className="chip parallel-chip" title={t('parallelHint')}>⇉ {t('parallel')}</span>}
                 {a && <Avatar look={a.look} size={30} />}
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 700 }}>{a?.name ?? '?'}</div>
+                  <div style={{ fontWeight: 700 }}>
+                    {a?.name ?? '?'} {a && !a.mine && <span className="chip">👤 {a.ownerName}</span>}
+                  </div>
                   {a && (
                     <div className="hint">
-                      <RoleLabel agent={a} /> · <ModelLabel modelId={a.modelId} />
+                      <RoleLabel agent={a} /> · {a.mine ? <ModelLabel modelId={a.modelId} /> : a.modelName}
                     </div>
                   )}
                 </div>
                 <span style={{ marginLeft: 'auto' }} className="row">
-                  {out && <Stars value={out.score} />}
+                  {out && !(isCurrent && liveHere) && out.score > 0 && <Stars value={out.score} />}
+                  {out?.arena && <span className="chip" title={t('arena_winnerHint')}>🏆</span>}
+                  {out && !liveHere && !task.arena && (
+                    <button className="btn sm" title={t('arena_tip')} aria-expanded={arenaFor === i} onClick={() => setArenaFor(arenaFor === i ? null : i)}>
+                      ⚔️ {t('arena')}
+                    </button>
+                  )}
                   <strong>{state}</strong>
                 </span>
               </div>
-              {isCurrent && task.active && (
+              {working && (
                 <div style={{ padding: '6px 10px 0' }}>
-                  <Progress value={task.stageProgress} thin />
+                  <Progress value={progress} thin />
                 </div>
               )}
-              {out ? (
+              {liveHere ? (
+                <div className="stage-out live" aria-live="polite" aria-busy="true">
+                  <div className="live-label">✍️ {t('liveTyping', { name: a?.name ?? '?' })}</div>
+                  <Markdown text={live.text} />
+                </div>
+              ) : out ? (
                 <div className="stage-out">
-                  {out.text}
-                  <div className="hint" style={{ marginTop: 6 }}>
-                    — {out.modelName} · {clockTime(out.at)} · <em>{t('simulatedTag')}</em>
+                  {out.research && <ResearchView result={out.research} />}
+                  <Markdown text={out.text} />
+                  <div className="row stage-out-foot">
+                    <span className="hint">
+                      — {out.modelName} · {clockTime(out.at)}
+                      {out.simulated && <> · <em>{t('simulatedTag')}</em></>}
+                      {out.simulated === false && (
+                        <>
+                          {' · '}<span className="chip real-chip">⚡ {t('realTag')}</span>
+                          {out.tokensIn !== undefined && (
+                            <> {t('tokensCost', { in: tokenCount(out.tokensIn), out: tokenCount(out.tokensOut ?? 0), cost: usd(out.costUsd ?? 0) })}</>
+                          )}
+                        </>
+                      )}
+                    </span>
+                    <span style={{ marginLeft: 'auto' }} className="row">
+                      <button className="btn sm" onClick={() => void copyText(out.text, t('copied'), t('copyFailed'))}>📋 {t('copy')}</button>
+                      <button className="btn sm" onClick={() => downloadText(`${slug(task.title)}-${i + 1}-${slug(out.agentName)}.md`, out.text)}>⬇ .md</button>
+                    </span>
                   </div>
                 </div>
               ) : (
                 <div className="stage-out empty">{t('noOutputs')}</div>
               )}
+              {arenaFor === i && !task.arena && <ArenaSetup task={task} stage={i} onDone={() => setArenaFor(null)} />}
+              {task.arena?.stage === i && <ArenaView task={task} />}
             </div>
           );
         })}
@@ -170,7 +272,7 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
           <div className="section-title">📝 {t('notesOnBoard')}</div>
           <div className="row" style={{ alignItems: 'stretch' }}>
             {notes.map((n) => {
-              const to = agents.find((a) => a.id === n.to);
+              const to = n.to === 'all' ? undefined : findAnyAgent(team, n.to);
               return (
                 <div
                   key={n.id}
@@ -197,5 +299,32 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
         ))}
       </div>
     </Window>
+  );
+}
+
+/** A real model call failed: why, what to do, and a retry button (rate limits also retry by themselves). */
+function BlockedBox({ task, busy, onRetry }: { task: Task; busy: boolean; onRetry: () => void }) {
+  const t = useT();
+  const lang = useStore((s) => s.settings.lang);
+  const b = task.blocked!;
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!b.until) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [b.until]);
+  const kind = ['auth', 'quota', 'rate', 'network', 'refusal', 'model'].includes(b.kind) ? b.kind : 'other';
+  const fix = { auth: 'blocked_fix_auth', quota: 'blocked_fix_quota', model: 'blocked_fix_model', refusal: 'blocked_fix_refusal' }[kind as 'auth'];
+  return (
+    <div className="blocked-box" role="alert">
+      <div className="row">
+        <strong>⛔ {t(`blocked_${kind}`)}</strong>
+        <span style={{ marginLeft: 'auto' }} />
+        <button className="btn warn" disabled={busy} onClick={onRetry}>↻ {t('blocked_retry')}</button>
+      </div>
+      {b.reason && <code className="blocked-reason">{b.reason}</code>}
+      {fix && <div className="hint">💡 {t(fix)}</div>}
+      {b.until && b.until > now && <div className="hint">⏱ {t('blocked_autoRetry', { time: timeLeft(b.until, lang) })}</div>}
+    </div>
   );
 }

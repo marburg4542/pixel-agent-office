@@ -1,6 +1,6 @@
-import type { ColumnId, Task } from '../types';
+import type { Task } from '../types';
 
-export const COLUMNS: ColumnId[] = ['backlog', 'todo', 'doing', 'review', 'done'];
+export { COLUMNS } from '../../shared/constants';
 
 /** 0–100 across the whole pipeline. */
 export function overallProgress(t: Task): number {

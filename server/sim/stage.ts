@@ -1,7 +1,9 @@
-import type { Agent, Lang, ModelDef, Note, StageOutput, Task } from '../types';
-import { roleById } from '../data/roles';
-import { translate } from '../i18n';
-import { clamp, pick, randInt } from '../util';
+import type { Agent, Lang, ModelDef, Note, StageOutput, Task } from '../../shared/types';
+import { roleById } from '../../shared/roles';
+import { translate } from '../../shared/i18n';
+import { clamp, pick, randInt } from '../../shared/util';
+import { collabInstructions, qaForPrompt, simVerdict } from './collab';
+import { groupRange } from '../../shared/pipeline';
 
 /**
  * Everything an agent "knows" when it works one step of a task.
@@ -19,47 +21,90 @@ export interface StageContext {
   nextAgent?: Agent;
 }
 
+/**
+ * @param s.notes notes addressed to this agent (already scoped per owner); only read ones that
+ *                apply to this task are used
+ * @param s.models the agent owner's model library
+ * @param s.findAgent looks up any agent (the next step may belong to another user on shared tasks)
+ */
 export function buildStageContext(
-  s: { agents: Agent[]; notes: Note[]; models: ModelDef[] },
+  s: { notes: Note[]; models: ModelDef[]; findAgent: (id: string) => Agent | undefined },
   task: Task,
   agent: Agent,
+  step = task.stage,
 ): StageContext {
+  // Everything finished before this step's group is handed to it (parallel teammates work side by side).
+  const [groupStart, groupEnd] = groupRange(task, step);
   const previous: StageOutput[] = [];
-  for (let i = 0; i < task.stage; i++) {
+  for (let i = 0; i < groupStart; i++) {
     const out = [...task.outputs].reverse().find((o) => o.stage === i);
     if (out) previous.push(out);
   }
-  const notes = s.notes.filter(
-    (n) => (n.to === agent.id || n.to === 'all') && (!n.taskId || n.taskId === task.id) && n.readBy.includes(agent.id),
-  );
+  const notes = s.notes.filter((n) => (!n.taskId || n.taskId === task.id) && n.readBy.includes(agent.id));
   return {
     task,
     agent,
     model: s.models.find((m) => m.id === agent.modelId),
-    stage: task.stage,
+    stage: step,
     previous,
     notes,
-    nextAgent: s.agents.find((a) => a.id === task.pipeline[task.stage + 1]),
+    nextAgent: s.findAgent(task.pipeline[groupEnd]),
   };
 }
 
 const roleName = (lang: Lang, a: Agent) => (a.role === 'custom' && a.roleLabel ? a.roleLabel : translate(lang, `role_${a.role}`));
 
-/** Messages for a real provider call (phase 2). Kept here so sim and real runs share one context. */
+/** What each role is for — a short orientation, not a script. */
+const ROLE_GUIDE: Record<Agent['role'], string> = {
+  planner: 'You turn goals into a clear, numbered plan with concrete deliverables and what "done" means for each.',
+  researcher: 'You find reliable information. Search the web when you can, cite sources as Markdown links, and keep facts separate from opinion.',
+  analyst:
+    'You analyse news and public sentiment. Search the web when you can; report the overall mood (positive/neutral/negative with rough percentages), the main themes, notable quotes with links, and the hard numbers — and say how confident you are.',
+  coder: 'You write working code in fenced blocks with a language tag, handle errors and edge cases, and add a short usage example.',
+  writer: 'You write clear, engaging prose for the intended reader, with a headline and tight structure.',
+  designer: "You design concretely: layout sections, colors as hex codes, typography and components. You can't produce images, so describe precisely.",
+  reviewer: "You review the work handed to you against the brief: what's good, issues ranked by severity, and concrete fixes.",
+  tester: 'You design tests: a table of cases with inputs and expected results, plus the risky gaps you see.',
+  manager: 'You run the team: you plan who works on what and keep work moving. When you do a step yourself, write a clear plan with owners and next actions.',
+  custom: 'Follow your standing instructions.',
+};
+
+/** Roles that get the provider's built-in web search when available. */
+export const WEB_SEARCH_ROLES = new Set<Agent['role']>(['researcher', 'analyst']);
+
+export const maxTokensFor = (size: Task['size']) => ({ S: 4000, M: 8000, L: 16000 })[size];
+/** Rough answer length used to show progress while a real answer streams in. */
+export const expectedChars = (size: Task['size']) => ({ S: 2500, M: 5000, L: 9000 })[size];
+
+const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n…(truncated)` : s);
+
+/** Messages for a real provider call — built from the same context the simulation uses. */
 export function buildPrompt(ctx: StageContext, lang: Lang): { system: string; user: string } {
   const { task, agent, previous, notes, nextAgent } = ctx;
   const system = [
-    `You are ${agent.name}, the ${roleName('en', agent)} on a small AI team.`,
-    agent.instructions,
-    `Reply in ${lang === 'th' ? 'Thai' : 'English'}.`,
-  ].filter(Boolean).join('\n');
+    `You are ${agent.name}, the ${roleName('en', agent)} on a small AI team that works in a shared office. Tasks move along a pipeline: each teammate does one step and hands the result to the next.`,
+    ROLE_GUIDE[agent.role],
+    agent.instructions && `Standing instructions from your manager:\n${agent.instructions}`,
+    `Write your result in Markdown, in ${lang === 'th' ? 'Thai' : 'English'}. Deliver the work itself — no preamble about what you are going to do.`,
+    collabInstructions(ctx),
+    `Today is ${new Date().toISOString().slice(0, 10)}.`,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
   const parts = [`# Task: ${task.title}`, task.description];
   if (previous.length) {
     parts.push('## Work handed to you');
-    for (const p of previous) parts.push(`### Step ${p.stage + 1} by ${p.agentName}\n${p.text}`);
+    // Keep the most recent hand-off whole; older steps are context, so they can be shortened.
+    previous.forEach((p, i) => parts.push(`### Step ${p.stage + 1} by ${p.agentName}\n${clip(p.text, i === previous.length - 1 ? 24000 : 6000)}`));
   }
   if (notes.length) parts.push('## Notes from your manager', ...notes.map((n) => `- ${n.text}`));
-  if (nextAgent) parts.push(`Your result will be handed to ${nextAgent.name} (${roleName('en', nextAgent)}).`);
+  parts.push(qaForPrompt(ctx));
+  parts.push(
+    nextAgent
+      ? `Your result goes next to ${nextAgent.name} (${roleName('en', nextAgent)}).`
+      : 'Yours is the last step; your result goes to the manager for review.',
+  );
   return { system, user: parts.filter(Boolean).join('\n\n') };
 }
 
@@ -117,6 +162,14 @@ export function simulateOutput(ctx: StageContext, lang: Lang): { text: string; s
       lines.push(th ? `สรุปผลค้นคว้า: ${task.title}` : `Research summary: ${task.title}`);
       sample(P.research, 3).forEach((s) => lines.push(`• ${s}`));
       break;
+    case 'analyst': {
+      const pos = 30 + randInt(40);
+      const neg = 5 + randInt(Math.max(1, 90 - pos - 5));
+      lines.push(th ? `สรุปความเห็นและข่าว: ${task.title}` : `Sentiment & news brief: ${task.title}`);
+      lines.push(th ? `ภาพรวมความรู้สึก: บวก ${pos}% · กลาง ${100 - pos - neg}% · ลบ ${neg}%` : `Overall sentiment: ${pos}% positive · ${100 - pos - neg}% neutral · ${neg}% negative`);
+      sample(P.research, 2).forEach((s) => lines.push(`• ${s}`));
+      break;
+    }
     case 'coder': {
       const fn = fnName(task.title);
       const n = 3 + randInt(4);
@@ -137,6 +190,7 @@ export function simulateOutput(ctx: StageContext, lang: Lang): { text: string; s
       lines.push(th ? `ผลการตรวจ${prev ? `งานของ ${prev.agentName}` : ''}` : `Review${prev ? ` of ${prev.agentName}'s work` : ''}`);
       sample(P.review, 3).forEach((s) => lines.push(`✔ ${s}`));
       lines.push(`✎ ${pick(P.suggest)}`);
+      lines.push('', simVerdict(ctx, lang));
       break;
     }
     case 'tester': {

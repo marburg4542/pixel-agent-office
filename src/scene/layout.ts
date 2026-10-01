@@ -9,12 +9,15 @@ export const NOTES_AREA = { x: 268, y: 10, w: 32, h: 40 };
 export const LEFT_WINDOW = { x: 16, y: 10, w: 72, h: 32 };
 export const RIGHT_WINDOW = { x: 310, y: 10, w: 76, h: 32 };
 export const CLOCK = { x: 112, y: 24 };
+/** Newsroom TV, under the clock. */
+export const TV = { x: 96, y: 36, w: 34, h: 21 };
 
 /** Walkways (feet y). */
 export const AISLE_TOP = 84;
 export const AISLE_MID = 146;
 export const BOARD_FRONT_Y = 79;
-export const BOARD_SLOTS = [160, 180, 200, 220, 240];
+/** Where agents stand while reading the board (8 = one per desk). */
+export const BOARD_SLOTS = [150, 164, 178, 192, 206, 220, 234, 248];
 /** Vertical corridors between desk columns. */
 const CORRIDORS = [106, 200, 294];
 
