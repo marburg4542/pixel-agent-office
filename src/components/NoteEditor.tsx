@@ -3,6 +3,7 @@ import type { Note, Scope } from '../types';
 import { useStore, useT, useTeam, type NoteInput } from '../store';
 import { NOTE_COLORS } from '../../shared/constants';
 import { Window } from './ui';
+import { PixelIcon } from './PixelIcon';
 
 export function NoteEditor({ z, onClose, noteId, preset }: { z: number; onClose: () => void; noteId?: string; preset?: Partial<Note> }) {
   const t = useT();
@@ -47,7 +48,7 @@ export function NoteEditor({ z, onClose, noteId, preset }: { z: number; onClose:
     <Window
       z={z}
       width={480}
-      title={existing ? `✏️ ${t('editNoteTitle')}` : `📝 ${t('newNoteTitle')}`}
+      title={<><PixelIcon name="note" /> {existing ? t('editNoteTitle') : t('newNoteTitle')}</>}
       onClose={onClose}
       footer={
         <>

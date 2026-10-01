@@ -5,6 +5,7 @@ import { COLUMN_COLORS, PRIORITY_COLORS } from '../scene/office';
 import { COLUMNS, NOTE_COLORS } from '../../shared/constants';
 import { overallProgress } from '../data/board';
 import { Avatar, Progress, ScopeBadge, Window } from './ui';
+import { PixelIcon, type IconName } from './PixelIcon';
 
 type ScopeFilter = 'all' | Scope;
 
@@ -47,7 +48,7 @@ export function BoardModal({ z, onClose }: { z: number; onClose: () => void }) {
   return (
     <Window
       z={z}
-      title={`📋 ${t('board')}`}
+      title={<><PixelIcon name="board" /> {t('board')}</>}
       onClose={onClose}
       className={`board-window ${docked ? 'docked' : ''}`}
       bodyClassName="board-body"
@@ -207,22 +208,25 @@ function TaskCard(props: {
   const current = findAnyAgent(useTeam(), task.pipeline[task.stage]);
   const noteCount = props.notes.filter((n) => n.taskId === task.id).length;
 
-  let status: React.ReactNode = null;
+  // Status line: a pixel icon + text (icon is decorative, the text says it).
+  let icon: IconName | null = null;
+  let label = '';
   let warn = false;
   if (!task.pipeline.length) {
-    status = `⚠ ${t('unassigned')}`;
-    warn = true;
-  } else if (task.column === 'done') status = `✅ ${t('col_done')}`;
-  else if (task.column === 'review') status = `🔍 ${t('colHint_review')}`;
-  else if (task.question) {
-    status = `❓ ${t('qa_waiting', { agent: task.question.agentName })}`;
-    warn = true;
-  } else if (task.blocked && (task.column === 'todo' || task.column === 'doing')) {
-    status = `⛔ ${t('blocked_short')}: ${t(`blocked_${['auth', 'quota', 'rate', 'network', 'refusal', 'model'].includes(task.blocked.kind) ? task.blocked.kind : 'other'}`)}`;
-    warn = true;
-  }
-  else if (current && task.active) status = `⚙ ${t('workingOn', { name: current.name, p: Math.floor(task.stageProgress) })}`;
-  else if (current && (task.column === 'todo' || task.column === 'doing')) status = `⏳ ${t('queuedFor', { name: current.name })}`;
+    [icon, label, warn] = ['blocked', t('unassigned'), true];
+  } else if (task.column === 'done') [icon, label] = ['done', t('col_done')];
+  else if (task.column === 'review') [icon, label] = ['review', t('colHint_review')];
+  else if (task.question) [icon, label, warn] = ['question', t('qa_waiting', { agent: task.question.agentName }), true];
+  else if (task.blocked && (task.column === 'todo' || task.column === 'doing')) {
+    const kind = ['auth', 'quota', 'rate', 'network', 'refusal', 'model'].includes(task.blocked.kind) ? task.blocked.kind : 'other';
+    [icon, label, warn] = ['blocked', `${t('blocked_short')}: ${t(`blocked_${kind}`)}`, true];
+  } else if (current && task.active) [icon, label] = ['gear', t('workingOn', { name: current.name, p: Math.floor(task.stageProgress) })];
+  else if (current && (task.column === 'todo' || task.column === 'doing')) [icon, label] = ['queued', t('queuedFor', { name: current.name })];
+  const status = icon ? (
+    <>
+      <PixelIcon name={icon} /> {label}
+    </>
+  ) : null;
 
   return (
     <div

@@ -7,9 +7,20 @@ import { roleById } from '../../shared/roles';
 import { translate } from '../../shared/i18n';
 import type { Look, Note } from '../types';
 import { BOARD, DESKS, NOTES_AREA, TV, inRect, seatOf, type Pt } from './layout';
+
+/** Feelings that last as long as their reason: a question waiting for an answer, a stuck task. */
+function standingEmote(agentId: string, s: State): EmoteKind | null {
+  for (const t of s.tasks) {
+    if (t.pipeline[t.stage] !== agentId || (t.column !== 'todo' && t.column !== 'doing')) continue;
+    if (t.question) return 'question';
+    if (t.blocked) return 'sweat';
+  }
+  return null;
+}
 import {
   drawBoard, drawBubble, drawCabinet, drawChair, drawClockHands, drawDesk, drawEnvelope, drawPaper,
-  drawPlant, drawProgress, drawTv, drawWallNotes, drawWaterCooler, drawWindows, rect, text,
+  drawEmote, drawNight, drawPlant, drawProgress, drawTv, drawWallNotes, drawWaterCooler, drawWindows, lampLight, nightLevel, rect, text,
+  type EmoteKind,
 } from './office';
 
 export type HoverTarget =
@@ -30,7 +41,8 @@ function noteUnread(n: Note, s: State): boolean {
 
 export function renderScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElement, s: State, hover: HoverTarget | null): void {
   const t = engine.realTime;
-  const now = new Date();
+  const now = engine.debugHour !== undefined ? new Date(2026, 0, 1, engine.debugHour, 30) : new Date();
+  const night = nightLevel(now);
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(bg, 0, 0);
   drawWindows(ctx, now, t);
@@ -68,6 +80,7 @@ export function renderScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElement
           working: va?.status === 'working',
           queue: a ? engine.queueFor(a.id).length : 0,
           hover: hover?.kind === 'desk' && hover.index === d.index,
+          night: a && va && va.status !== 'walking' ? night : 0,
           t,
         }),
     });
@@ -84,6 +97,17 @@ export function renderScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElement
   items.push({ y: 222, draw: () => drawPlant(ctx, 390, 222, false) });
   items.sort((a, b) => a.y - b.y).forEach((i) => i.draw());
 
+  if (night > 0) {
+    const lights: { x: number; y: number; r: number }[] = [];
+    for (const a of s.agents) {
+      const va = engine.agents.get(a.id);
+      if (!va || va.status === 'walking' || va.status === 'reading') continue;
+      lights.push({ ...lampLight(DESKS[a.desk] ?? DESKS[0]), r: va.status === 'working' ? 34 : 26 });
+    }
+    lights.push({ x: TV.x + TV.w / 2, y: TV.y + TV.h / 2, r: 22 });
+    drawNight(ctx, night, lights);
+  }
+
   // Overlays (always on top)
   for (const a of s.agents) {
     const va = engine.agents.get(a.id);
@@ -94,7 +118,9 @@ export function renderScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElement
       drawProgress(ctx, va.x, head - 9, va.progress, roleById(a.role).color);
       top = head - 9;
     }
+    const emote = va.emote?.kind ?? standingEmote(a.id, s);
     if (va.bubble) drawBubble(ctx, va.x, top, va.bubble.text);
+    else if (emote) drawEmote(ctx, va.x + 7, top - 9 + Math.round(Math.sin(t * 3)), emote);
     else if (engine.unreadNotes(a.id).length) drawEnvelope(ctx, va.x + 5, top - 8 + Math.round(Math.sin(t * 4)));
     else if (va.status === 'idle' && t - va.idleSince > 20) {
       const k = (t * 0.8) % 1;
@@ -124,10 +150,19 @@ function drawAgent(ctx: CanvasRenderingContext2D, look: Look, va: VisualAgent, t
   const step = Math.floor(va.walkDist / 5) % 2;
   const legs = va.moving ? (step ? 'walk1' : 'walk2') : 'stand';
   const arms = va.status === 'working' && !paused ? (Math.floor(va.typeT * 7) % 2 ? 'typeL' : 'typeR') : 'rest';
-  const spr = getSprite(look, { view: va.facing, legs, arms, blink: va.blinking });
+  const view = va.facing === 'left' || va.facing === 'right' ? 'side' : va.facing;
+  const spr = getSprite(look, { view, legs, arms, blink: va.blinking });
   const bob = va.moving ? -step : va.status === 'idle' ? Math.floor(t * 1.1) % 2 : 0;
   if (va.status === 'walking' || va.status === 'reading') rect(ctx, va.x - 5, va.y - 1, 10, 2, 'rgba(40,20,10,0.25)');
-  ctx.drawImage(spr, Math.round(va.x - 8), Math.round(va.y - 26 + bob));
+  const x = Math.round(va.x - 8);
+  const y = Math.round(va.y - 26 + bob);
+  if (va.facing === 'left') {
+    ctx.save();
+    ctx.translate(x + 16, y);
+    ctx.scale(-1, 1);
+    ctx.drawImage(spr, 0, 0);
+    ctx.restore();
+  } else ctx.drawImage(spr, x, y);
 }
 
 export function hitTest(p: Pt, s: State): HoverTarget | null {

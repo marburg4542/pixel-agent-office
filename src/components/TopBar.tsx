@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { onServerEvent } from '../lib/events';
 import type { PublicUser } from '../types';
 import { UserAvatar } from './ui';
+import { PixelIcon } from './PixelIcon';
 
 /** Admins see how many sign-ups are waiting for approval. */
 function usePendingCount(isAdmin: boolean): number {
@@ -51,6 +52,7 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
   const doing = useStore((s) => s.tasks.filter((x) => x.column === 'doing').length);
   const waiting = useStore((s) => s.tasks.filter((x) => x.column === 'todo').length);
   const review = useStore((s) => s.tasks.filter((x) => x.column === 'review').length);
+  const questions = useStore((s) => s.tasks.filter((x) => x.question).length);
   const { setLang, togglePause, setSpeed, openModal } = useStore.getState();
   const isAdmin = user?.role === 'Admin';
   const pending = usePendingCount(isAdmin);
@@ -78,7 +80,7 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
           <rect x="2" y="8" width="9" height="4" fill="#4f7cf0" />
           <rect x="9" y="7" width="4" height="3" fill="#c9ccd6" />
         </svg>
-        {t('appTitle')}
+        <span className="brand-name">{t('appTitle')}</span>
       </div>
       <button className={`ai-badge ai-${ai.kind}`} title={ai.hint} aria-label={`${t(`aiBadge_${ai.kind}`)} — ${ai.hint}`} onClick={() => openModal({ kind: 'settings', tab: ai.tab })}>
         {ai.kind === 'real' ? '⚡' : ai.kind === 'mixed' ? '◐' : '🎲'} {t(`aiBadge_${ai.kind}`)}
@@ -86,9 +88,9 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
 
       <div className="tb-group">
         <button className={`btn dark sm ${paused ? 'on' : ''}`} onClick={togglePause} title={paused ? t('play') : t('pause')}>
-          {paused ? '▶' : '❚❚'} {paused ? t('play') : t('pause')}
+          <PixelIcon name={paused ? 'play' : 'pause'} /> <span className="tb-label">{paused ? t('play') : t('pause')}</span>
         </button>
-        <span className="seg" aria-label={t('speed')}>
+        <span className="seg desktop-only" aria-label={t('speed')}>
           {SIM_SPEEDS.map((n) => (
             <button key={n} className={`btn dark sm ${speed === n ? 'on' : ''}`} onClick={() => setSpeed(n)}>
               ×{n}
@@ -103,7 +105,12 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
         <span title={t('col_doing')}>⚙ <b>{doing}</b> {t('statsDoing')}</span>
         {review > 0 && (
           <button className="stat-link" onClick={() => openModal({ kind: 'board' })}>
-            🔍 <b>{review}</b> {t('col_review')}
+            <PixelIcon name="review" /> <b>{review}</b> {t('col_review')}
+          </button>
+        )}
+        {questions > 0 && (
+          <button className="stat-link" onClick={() => openModal({ kind: 'board' })}>
+            <PixelIcon name="question" /> <b>{questions}</b> {t('stats_questions')}
           </button>
         )}
       </div>
@@ -111,28 +118,42 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
       <div className="spacer" />
 
       <div className="tb-group">
-        <button className="btn warn sm" onClick={() => openModal({ kind: 'board' })}>📋 {t('board')}</button>
-        <button className="btn sm" onClick={() => openModal({ kind: 'newsroom' })}>📺 {t('newsroom')}</button>
-        <button className="btn sm" onClick={() => openModal({ kind: 'stats' })}>📊 {t('stats')}</button>
-        <button className="btn sm" disabled={agents >= MAX_DESKS} title={agents >= MAX_DESKS ? t('officeFull') : ''} onClick={() => openModal({ kind: 'agentEdit' })}>
-          ➕ {t('hire')}
+        <button className="btn warn sm" onClick={() => openModal({ kind: 'board' })} aria-label={t('board')}>
+          <PixelIcon name="board" /> <span className="tb-label">{t('board')}</span>
         </button>
-        <button className="btn sm" onClick={() => openModal({ kind: 'models' })}>🧠 {t('models')}</button>
+        <button className="btn sm" onClick={() => openModal({ kind: 'newsroom' })} aria-label={t('newsroom')}>
+          <PixelIcon name="tv" /> <span className="tb-label">{t('newsroom')}</span>
+        </button>
+        <button className="btn sm" onClick={() => openModal({ kind: 'stats' })} aria-label={t('stats')}>
+          <PixelIcon name="stats" /> <span className="tb-label">{t('stats')}</span>
+        </button>
+        <button className="btn sm" disabled={agents >= MAX_DESKS} title={agents >= MAX_DESKS ? t('officeFull') : ''} onClick={() => openModal({ kind: 'agentEdit' })}>
+          <PixelIcon name="hire" /> <span className="tb-label">{t('hire')}</span>
+        </button>
+        <button className="btn sm desktop-only" onClick={() => openModal({ kind: 'models' })} aria-label={t('models')}>
+          <PixelIcon name="chip" /> <span className="tb-label">{t('models')}</span>
+        </button>
         {isAdmin && (
-          <button className="btn sm" onClick={() => openModal({ kind: 'users' })}>
-            👑 {t('users_admin')}
+          <button className="btn sm" onClick={() => openModal({ kind: 'users' })} aria-label={t('users_admin')}>
+            <PixelIcon name="crown" /> <span className="tb-label">{t('users_admin')}</span>
             {pending > 0 && <span className="badge">{pending}</span>}
           </button>
         )}
-        <button className="btn dark sm sidebar-toggle" onClick={() => document.body.classList.toggle('show-sidebar')} aria-label={t('team')}>👥</button>
-        <button className="btn dark sm icon" onClick={() => openModal({ kind: 'help' })} title={t('help')} aria-label={t('help')}>?</button>
-        <button className="btn dark sm" onClick={() => setLang(lang === 'th' ? 'en' : 'th')}>🌐 {t('language')}</button>
+        <button className="btn dark sm sidebar-toggle" onClick={() => document.body.classList.toggle('show-sidebar')} aria-label={t('team')}>
+          <PixelIcon name="team" />
+        </button>
+        <button className="btn dark sm icon" onClick={() => openModal({ kind: 'help' })} title={t('help')} aria-label={t('help')}>
+          <PixelIcon name="help" />
+        </button>
+        <button className="btn dark sm" onClick={() => setLang(lang === 'th' ? 'en' : 'th')} aria-label={t('language')}>
+          <PixelIcon name="globe" /> <span className="tb-label">{t('language')}</span>
+        </button>
         <button className="btn dark sm user-chip" onClick={() => openModal({ kind: 'settings' })} title={t('settings')}>
           {user && <UserAvatar user={user} size={20} />}
-          <span className="user-name">{user?.username}</span> ⚙
+          <span className="user-name">{user?.username}</span> <PixelIcon name="gear" />
         </button>
         <button className="btn dark sm icon" onClick={onSignOut} title={t('logout')} aria-label={t('logout')}>
-          ⏻
+          <PixelIcon name="power" />
         </button>
       </div>
     </header>

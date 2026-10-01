@@ -23,7 +23,9 @@ export function OfficeCanvas() {
       const dpr = window.devicePixelRatio || 1;
       const cs = getComputedStyle(wrap);
       const w = wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 12;
-      const h = wrap.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - 12;
+      // On phones the office sits above the inbox and grows with its width (the page scrolls).
+      const phone = window.matchMedia('(max-width: 760px)').matches;
+      const h = phone ? Infinity : wrap.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - 12;
       const best = Math.min((w * dpr) / SCENE_W, (h * dpr) / SCENE_H);
       // Whole-number scales keep pixels perfectly crisp; on small screens where that would waste
       // lots of space, fill the space instead (pixels become a hair uneven, which is hard to see).
@@ -68,7 +70,7 @@ export function OfficeCanvas() {
   const onMove = (e: React.MouseEvent) => {
     const target = hitTest(locate(e), useStore.getState());
     hoverRef.current = target;
-    canvasRef.current!.style.cursor = target ? 'pointer' : 'default';
+    canvasRef.current!.style.cursor = target ? 'var(--cursor-pointer, pointer)' : 'var(--cursor, default)';
     const wr = wrapRef.current!.getBoundingClientRect();
     setTip(target ? { target, x: e.clientX - wr.left + 16, y: e.clientY - wr.top + 12 } : null);
   };

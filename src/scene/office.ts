@@ -337,6 +337,8 @@ export interface DeskDrawOpts {
   working?: boolean;
   queue?: number;
   hover?: boolean;
+  /** 0…1 how dark it is — lamps glow at night. */
+  night?: number;
   t: number;
 }
 
@@ -368,6 +370,14 @@ export function drawDesk(ctx: Ctx, d: DeskPos, o: DeskDrawOpts): void {
     rect(ctx, x - 20, y - 26, 3, 1, '#6b3e26');
     rect(ctx, x - 16, y - 25, 1, 2, '#3a2418');
     if (o.working && Math.floor(o.t * 2) % 2 === 0) rect(ctx, x - 19, y - 30, 1, 2, 'rgba(255,255,255,0.7)');
+
+    // desk lamp (on at night while someone is at the desk)
+    const lampOn = (o.night ?? 0) > 0.2;
+    rect(ctx, x - 13, y - 24, 5, 2, '#3a2418');
+    rect(ctx, x - 11, y - 31, 1, 7, '#3a2418');
+    rect(ctx, x - 14, y - 34, 6, 3, '#3a2418');
+    rect(ctx, x - 13, y - 33, 4, 1, lampOn ? '#ffd27a' : '#6e8c5a');
+    if (lampOn) rect(ctx, x - 12, y - 31, 2, 1, '#fff2b8');
 
     // paper stack = queued work
     const q = Math.min(o.queue ?? 0, 5);
@@ -475,4 +485,78 @@ export function drawPaper(ctx: Ctx, x: number, y: number): void {
   rect(ctx, x - 2, y - 3, 5, 6, '#fdf6e3');
   rect(ctx, x - 1, y - 2, 3, 1, '#9a8a7a');
   rect(ctx, x - 1, y, 3, 1, '#9a8a7a');
+}
+
+/** Where each lamp's light comes from (for the night overlay). */
+export const lampLight = (d: DeskPos) => ({ x: d.x - 11, y: d.y - 28 });
+
+export type EmoteKind = 'heart' | 'sweat' | 'question' | 'anger' | 'cup' | 'note' | 'drop';
+
+const EMOTES: Record<EmoteKind, { rows: string[]; pal: Record<string, string> }> = {
+  heart: { rows: ['.rr.rr.', 'rRRrRRr', 'rRRRRRr', '.rRRRr.', '..rRr..', '...r...'], pal: { r: '#8c1f3a', R: '#ff5c7a' } },
+  sweat: { rows: ['..b..', '.bBb.', 'bBBBb', 'bBwBb', '.bbb.'], pal: { b: '#2a4f8a', B: '#7ec8ff', w: '#ffffff' } },
+  question: { rows: ['.ooo.', 'oyyyo', 'o..yo', '..yo.', '..o..', '.....', '..y..'], pal: { o: '#2a1e2e', y: '#ffd24a' } },
+  anger: { rows: ['r.r.r', '.r.r.', 'r...r', '.r.r.', 'r.r.r'], pal: { r: '#e0303a' } },
+  cup: { rows: ['.s.s.', '.....', 'ooooo.', 'owwwoo', 'owwwo.', '.ooo..'], pal: { s: '#ffffff', o: '#2a1e2e', w: '#f4f1ea' } },
+  note: { rows: ['..ooo', '..o.o', '..o.o', 'ooo.o', 'ooo..'], pal: { o: '#2a1e2e' } },
+  drop: { rows: ['.b.', 'bBb', '.b.'], pal: { b: '#2a4f8a', B: '#7ec8ff' } },
+};
+
+/** A small pixel icon above an agent's head (feelings, coffee, …). */
+export function drawEmote(ctx: Ctx, x: number, y: number, kind: EmoteKind): void {
+  const e = EMOTES[kind];
+  const w = Math.max(...e.rows.map((r) => r.length));
+  const x0 = Math.round(x - w / 2);
+  e.rows.forEach((row, j) => {
+    for (let i = 0; i < row.length; i++) {
+      const c = e.pal[row[i]];
+      if (c) rect(ctx, x0 + i, y + j, 1, 1, c);
+    }
+  });
+}
+
+/**
+ * Night: darken the room, then let desk lamps (and the TV) glow. `lights` are the lamps that are on.
+ * Drawn through a reusable offscreen canvas so the lights cut holes in the darkness.
+ */
+let darkness: HTMLCanvasElement | null = null;
+export function drawNight(ctx: Ctx, level: number, lights: { x: number; y: number; r: number }[]): void {
+  if (level <= 0) return;
+  darkness ??= document.createElement('canvas');
+  darkness.width = SCENE_W;
+  darkness.height = SCENE_H;
+  const d = darkness.getContext('2d')!;
+  d.globalCompositeOperation = 'source-over';
+  d.clearRect(0, 0, SCENE_W, SCENE_H);
+  d.fillStyle = `rgba(14, 18, 48, ${0.55 * level})`;
+  d.fillRect(0, 0, SCENE_W, SCENE_H);
+  d.globalCompositeOperation = 'destination-out';
+  for (const l of lights) {
+    const g = d.createRadialGradient(l.x, l.y, 2, l.x, l.y, l.r);
+    g.addColorStop(0, 'rgba(0,0,0,0.95)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    d.fillStyle = g;
+    d.fillRect(l.x - l.r, l.y - l.r, l.r * 2, l.r * 2);
+  }
+  ctx.drawImage(darkness, 0, 0);
+  // warm glow
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const l of lights) {
+    const g = ctx.createRadialGradient(l.x, l.y, 1, l.x, l.y, l.r * 0.7);
+    g.addColorStop(0, `rgba(255, 190, 110, ${0.22 * level})`);
+    g.addColorStop(1, 'rgba(255, 190, 110, 0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(l.x - l.r, l.y - l.r, l.r * 2, l.r * 2);
+  }
+  ctx.restore();
+}
+
+/** 0 by day, 1 at night (after 19:00 until 05:00), fading over an hour at dusk and dawn. */
+export function nightLevel(now: Date): number {
+  const h = now.getHours() + now.getMinutes() / 60;
+  if (h >= 19 || h < 5) return 1;
+  if (h >= 18) return h - 18;
+  if (h < 6) return 6 - h;
+  return 0;
 }

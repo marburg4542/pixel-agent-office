@@ -9,6 +9,7 @@ import { usd } from '../util';
 import { Avatar, Window } from './ui';
 import { ChartCard, HBars, Sparkline, StackedColumns, StatTile, shortDate, signed } from './charts';
 import { sentimentKey } from './ResearchView';
+import { PixelIcon } from './PixelIcon';
 
 const duration = (s: number | null, lang: 'th' | 'en') => {
   if (s === null) return '–';
@@ -46,7 +47,7 @@ export function StatsWindow({ z, onClose }: { z: number; onClose: () => void }) 
   const day = (d: string) => shortDate(Date.parse(`${d}T00:00:00`), lang);
 
   return (
-    <Window z={z} width={980} title={`📊 ${t('stats')}`} onClose={onClose} bodyClassName="viz-root">
+    <Window z={z} width={980} title={<><PixelIcon name="stats" /> {t('stats')}</>} onClose={onClose} bodyClassName="viz-root">
       {!stats ? (
         <p className="hint">{error ? t('stats_error') : t('loading')}</p>
       ) : (

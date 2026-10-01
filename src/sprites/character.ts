@@ -16,7 +16,8 @@ type PxList = { px: [number, number, string][] };
 type Layer = Tpl | PxList;
 type Label = { th: string; en: string };
 
-export type View = 'front' | 'back';
+/** 'side' = three-quarter view facing right (mirror it for left). */
+export type View = 'front' | 'back' | 'side';
 export type Legs = 'stand' | 'walk1' | 'walk2';
 export type Arms = 'rest' | 'typeL' | 'typeR';
 
@@ -99,6 +100,9 @@ const LEGS: Record<Legs, Tpl> = {
 const MOUTH = px([7, 11, 'm'], [8, 11, 'm']);
 const BLUSH = px([4, 10, 'c'], [11, 10, 'c']);
 const BLINK = px([4, 9, 'e'], [5, 9, 'e'], [10, 9, 'e'], [11, 9, 'e']);
+
+/** Move face pixels sideways for the three-quarter view; drop what would fall off the far cheek. */
+const shiftPx = (l: PxList, dx: number, minX = 4): PxList => ({ px: l.px.map(([x, y, c]) => [x + dx, y, c] as [number, number, string]).filter(([x]) => x >= minX && x <= 12) });
 
 // ─── Parts ──────────────────────────────────────────────────────────────────
 
@@ -498,7 +502,8 @@ function compose(look: Look, o: SpriteOpts): Grid {
   const acc = ACCESSORIES[look.acc] ?? ACCESSORIES[0];
   const legPal = top.legsSkin ? { p: pal.s, P: pal.d } : undefined;
 
-  if (o.view === 'front') {
+  if (o.view === 'front' || o.view === 'side') {
+    const dx = o.view === 'side' ? 1 : 0;
     hair.behind?.forEach((l) => stamp(grid, l, pal));
     stamp(grid, LEGS[o.legs], pal, legPal);
     stamp(grid, BODY_FRONT, pal);
@@ -506,9 +511,9 @@ function compose(look: Look, o: SpriteOpts): Grid {
     if (top.skirt) stamp(grid, top.skirt, pal);
     stamp(grid, HEAD_FRONT, pal);
     const eyes = EYES[look.eyes] ?? EYES[0];
-    stamp(grid, o.blink && eyes.canBlink ? BLINK : eyes.open, pal);
-    stamp(grid, MOUTH, pal);
-    stamp(grid, BLUSH, pal);
+    stamp(grid, shiftPx(o.blink && eyes.canBlink ? BLINK : eyes.open, dx), pal);
+    stamp(grid, shiftPx(MOUTH, dx), pal);
+    stamp(grid, shiftPx(BLUSH, dx, dx ? 6 : 4), pal);
     hair.front.forEach((l) => stamp(grid, l, pal));
     acc.front.forEach((l) => stamp(grid, l, pal));
     // Typing: lift one hand a pixel.

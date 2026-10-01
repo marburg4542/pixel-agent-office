@@ -10,6 +10,7 @@ import { translate } from '../shared/i18n';
 import type { Workspace } from './types';
 import { TopBar } from './components/TopBar';
 import { OfficeCanvas } from './components/OfficeCanvas';
+import { MobileInbox } from './components/MobileInbox';
 import { Sidebar } from './components/Sidebar';
 import { ModalHost } from './components/ModalHost';
 import { Toasts } from './components/Toasts';
@@ -41,6 +42,7 @@ function Office({ onSignOut }: { onSignOut: () => void }) {
       <TopBar onSignOut={onSignOut} />
       <main className="main">
         <OfficeCanvas />
+        <MobileInbox />
         <Sidebar />
       </main>
       <ModalHost />

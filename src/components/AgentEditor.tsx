@@ -9,6 +9,7 @@ import { pick } from '../util';
 import { play } from '../lib/sound';
 import { Pips, ProviderDot, Window } from './ui';
 import { SpritePreview, type PreviewAnim } from './SpritePreview';
+import { PixelIcon } from './PixelIcon';
 
 const NAMES = ['Ada', 'Bit', 'Cleo', 'Dex', 'Echo', 'Finn', 'Gigi', 'Hex', 'Ivy', 'Juno', 'Kai', 'Luma', 'Milo', 'Nix', 'Orbit', 'Pip', 'Rex', 'Sol', 'Tux', 'Vega', 'Zed'];
 
@@ -71,7 +72,7 @@ export function AgentEditor({ z, onClose, agentId, desk }: { z: number; onClose:
     <Window
       z={z}
       width={880}
-      title={existing ? `✏️ ${t('editAgentTitle')} — ${existing.name}` : `🧑‍💻 ${t('hireTitle')}`}
+      title={<><PixelIcon name="hire" /> {existing ? `${t('editAgentTitle')} — ${existing.name}` : t('hireTitle')}</>}
       onClose={onClose}
       footer={
         <>

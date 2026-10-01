@@ -587,6 +587,11 @@ const en: Dict = {
   stats_contributorsSub: "Work done by each person's agents",
   stats_news: 'News mood',
   stats_lastRun: 'Last run',
+  mob_inbox: 'What needs you',
+  mob_newPh: 'New task — type a title',
+  mob_needsYou: 'Needs you',
+  mob_allClear: 'Nothing waiting on you right now.',
+  mob_working: 'Working now',
 
   bubble_gotIt: 'Got it!',
   bubble_done: 'Done!',
@@ -1177,6 +1182,11 @@ const th: Dict = {
   stats_contributorsSub: 'ผลงานจากเอเจนต์ของแต่ละคน',
   stats_news: 'บรรยากาศข่าว',
   stats_lastRun: 'รันล่าสุด',
+  mob_inbox: 'สิ่งที่รอคุณ',
+  mob_newPh: 'งานใหม่ — พิมพ์ชื่องาน',
+  mob_needsYou: 'รอคุณอยู่',
+  mob_allClear: 'ตอนนี้ไม่มีอะไรรอคุณ',
+  mob_working: 'กำลังทำอยู่',
 
   bubble_gotIt: 'รับทราบ!',
   bubble_done: 'เสร็จแล้ว!',

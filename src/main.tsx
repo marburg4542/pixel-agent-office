@@ -10,11 +10,14 @@ import '@fontsource/chakra-petch/600.css';
 import '@fontsource/chakra-petch/700.css';
 import './styles.css';
 import { App } from './App';
+import { installPixelCursors } from './lib/cursor';
 
 // Canvas text doesn't trigger font downloads on its own — warm both faces (incl. the Thai subset).
 for (const spec of ['500 12px "Pixelify Sans"', '600 12px "Pixelify Sans"', '500 12px "Chakra Petch"']) {
   document.fonts.load(spec, 'Aa กขค').catch(() => {});
 }
+
+installPixelCursors();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

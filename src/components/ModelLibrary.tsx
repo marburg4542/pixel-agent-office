@@ -3,6 +3,7 @@ import type { ModelDef, ProviderId } from '../types';
 import { useStore, useT, type ModelPatch } from '../store';
 import { PROVIDER_ORDER, PROVIDERS } from '../../shared/models';
 import { ProviderDot, Window } from './ui';
+import { PixelIcon } from './PixelIcon';
 
 export function ModelLibrary({ z, onClose }: { z: number; onClose: () => void }) {
   const t = useT();
@@ -17,7 +18,7 @@ export function ModelLibrary({ z, onClose }: { z: number; onClose: () => void })
     <Window
       z={z}
       width={1000}
-      title={`🧠 ${t('models')}`}
+      title={<><PixelIcon name="chip" /> {t('models')}</>}
       onClose={onClose}
       footer={
         <>

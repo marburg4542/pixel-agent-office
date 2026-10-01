@@ -9,6 +9,7 @@ import { Avatar, ScopeBadge, Window } from './ui';
 import { Markdown } from './Markdown';
 import { ResearchView, sentimentKey } from './ResearchView';
 import { LineChart, Sparkline, shortDate, signed } from './charts';
+import { PixelIcon } from './PixelIcon';
 
 type ScopeFilter = 'all' | 'personal' | 'shared';
 
@@ -48,7 +49,7 @@ export function NewsroomWindow({ z, onClose, watchlistId }: { z: number; onClose
   const counts = { all: watchlists.length, personal: watchlists.filter((w) => w.scope === 'personal').length, shared: watchlists.filter((w) => w.scope === 'shared').length };
 
   return (
-    <Window z={z} width={1060} title={`📺 ${t('newsroom')}`} onClose={onClose} className="newsroom-window" bodyClassName="newsroom">
+    <Window z={z} width={1060} title={<><PixelIcon name="tv" /> {t('newsroom')}</>} onClose={onClose} className="newsroom-window" bodyClassName="newsroom">
       <div className="board-toolbar">
         <button className="btn primary" onClick={() => openModal({ kind: 'watchEdit' })}>＋ {t('nr_new')}</button>
         <span className="seg" role="tablist">
@@ -299,7 +300,7 @@ export function WatchlistEditor({ z, onClose, watchlistId }: { z: number; onClos
     <Window
       z={z}
       width={640}
-      title={existing ? `✏️ ${existing.name}` : `📺 ${t('nr_new')}`}
+      title={<><PixelIcon name="tv" /> {existing ? existing.name : t('nr_new')}</>}
       onClose={onClose}
       footer={
         <>

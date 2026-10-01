@@ -14,12 +14,13 @@ import { KEY_PROVIDERS, type KeyProviderDef } from '../../shared/keys';
 import type { ApiKeyStatus, PublicUser, SettingsTab } from '../types';
 import { PasswordStrength } from './auth/PasswordStrength';
 import { UserAvatar, Window } from './ui';
+import { PixelIcon } from './PixelIcon';
 
 export function SettingsWindow({ z, onClose, tab: initialTab }: { z: number; onClose: () => void; tab?: SettingsTab }) {
   const t = useT();
   const [tab, setTab] = useState<SettingsTab>(initialTab ?? 'profile');
   return (
-    <Window z={z} width={720} title={`⚙ ${t('settings')}`} onClose={onClose}>
+    <Window z={z} width={720} title={<><PixelIcon name="gear" /> {t('settings')}</>} onClose={onClose}>
       <div className="tabs" role="tablist">
         {(['profile', 'sound', 'ai', 'keys', 'data'] as SettingsTab[]).map((k) => (
           <button key={k} role="tab" aria-selected={tab === k} className={`tab ${tab === k ? 'on' : ''}`} onClick={() => setTab(k)}>

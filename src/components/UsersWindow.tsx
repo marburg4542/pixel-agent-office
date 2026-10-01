@@ -6,6 +6,7 @@ import { onServerEvent } from '../lib/events';
 import { toast } from '../lib/toast';
 import type { PublicUser, UserRole, UserStatus } from '../types';
 import { UserAvatar, Window } from './ui';
+import { PixelIcon } from './PixelIcon';
 
 const STATUS_COLOR: Record<UserStatus, string> = { Active: '#3fae6a', Pending: '#f0a030', Denied: '#d8453e' };
 
@@ -72,7 +73,7 @@ export function UsersWindow({ z, onClose }: { z: number; onClose: () => void }) 
   const pending = (users ?? []).filter((u) => u.status === 'Pending').length;
 
   return (
-    <Window z={z} width={860} title={`👑 ${t('users_admin')}`} onClose={onClose}>
+    <Window z={z} width={860} title={<><PixelIcon name="crown" /> {t('users_admin')}</>} onClose={onClose}>
       <div className="row" style={{ marginBottom: 12 }}>
         <p className="hint" style={{ margin: 0 }}>{t('users_hint')}</p>
         <select className="select" style={{ width: 'auto', marginLeft: 'auto' }} value={filter} onChange={(e) => setFilter(e.target.value as 'ALL' | UserStatus)}>

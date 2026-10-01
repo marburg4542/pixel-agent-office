@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useT } from '../store';
 import { Window } from './ui';
+import { PixelIcon } from './PixelIcon';
 
 const STEPS = [
   { art: '🏢', key: 'office' },
@@ -33,7 +34,7 @@ export function HelpWindow({ z, onClose, step: initial = 0 }: { z: number; onClo
     <Window
       z={z}
       width={620}
-      title={`❔ ${t('help')}`}
+      title={<><PixelIcon name="help" /> {t('help')}</>}
       onClose={onClose}
       footer={
         <>

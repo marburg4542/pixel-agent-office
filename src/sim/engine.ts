@@ -2,7 +2,8 @@
 // positions and animation for the canvas. All decisions happen on the server — nothing here
 // changes data.
 import { runtimeValue, useStore } from '../store';
-import { BOARD_SLOTS, DESKS, SCENE_W, pathFromBoard, pathToBoard, seatOf, type Pt } from '../scene/layout';
+import { AISLE_MID, AISLE_TOP, BOARD_SLOTS, DESKS, SCENE_W, pathFromBoard, pathToBoard, seatOf, type DeskPos, type Pt } from '../scene/layout';
+import type { EmoteKind } from '../scene/office';
 import { TRIP_ARRIVE, TRIP_LEAVE } from '../../shared/constants';
 import { PROVIDERS } from '../../shared/models';
 import { translate } from '../../shared/i18n';
@@ -17,7 +18,7 @@ export interface VisualAgent {
   desk: number;
   x: number;
   y: number;
-  facing: 'front' | 'back';
+  facing: 'front' | 'back' | 'left' | 'right';
   moving: boolean;
   /** distance walked — drives the leg animation */
   walkDist: number;
@@ -30,6 +31,41 @@ export interface VisualAgent {
   slot: number | null;
   progress: number;
   taskId?: string;
+  /** A short feeling shown above the head. */
+  emote: { kind: EmoteKind; t: number } | null;
+  /** Something to do while idle: a walk to the water cooler or a plant and back. */
+  wander: Wander | null;
+}
+
+interface Wander {
+  kind: 'coffee' | 'plant';
+  there: Pt[];
+  len: number;
+  d: number;
+  phase: 'go' | 'stay' | 'back';
+  stay: number;
+}
+
+/** Where idle agents like to go. */
+const SPOTS = {
+  coffee: { x: 374, y: 174 },
+  plantL: { x: 28, y: 92 },
+  plantR: { x: 372, y: 92 },
+};
+const CORRIDOR_XS = [106, 200, 294];
+const WANDER_SPEED = 26;
+
+/** Seat → spot, along the aisles (row-0 desks go around their desk through a corridor). */
+function pathToSpot(desk: DeskPos, spot: Pt, viaMid: boolean): Pt[] {
+  const seat = seatOf(desk);
+  if (!viaMid) {
+    const pts = pathToBoard(desk, spot.x);
+    pts[pts.length - 1] = spot;
+    return [seat, ...pts];
+  }
+  if (desk.row === 1) return [seat, { x: seat.x, y: AISLE_MID }, { x: spot.x, y: AISLE_MID }, spot];
+  const cx = CORRIDOR_XS.reduce((b, c) => (Math.abs(c - seat.x) < Math.abs(b - seat.x) ? c : b), CORRIDOR_XS[0]);
+  return [seat, { x: seat.x, y: AISLE_TOP }, { x: cx, y: AISLE_TOP }, { x: cx, y: AISLE_MID }, { x: spot.x, y: AISLE_MID }, spot];
 }
 
 interface Particle {
@@ -73,6 +109,10 @@ function pointAlong(pts: Pt[], dist: number): { p: Pt; dy: number; dx: number } 
   return { p: pts[pts.length - 1], dx: 0, dy: 0 };
 }
 
+/** Which way to face while walking along (dx, dy). */
+const faceFor = (dx: number, dy: number): VisualAgent['facing'] =>
+  Math.abs(dy) > Math.abs(dx) ? (dy < 0 ? 'back' : 'front') : dx < 0 ? 'left' : 'right';
+
 /** Is this note addressed to this agent? Mirrors the server rule. */
 const noteTargets = (n: Note, a: Agent) => n.to === a.id || (n.to === 'all' && (n.scope === 'shared' || n.createdBy === a.ownerId));
 
@@ -82,6 +122,8 @@ class Engine {
   flyers: Flyer[] = [];
   /** Real seconds since start — cosmetic animation clock. */
   realTime = 0;
+  /** Pretend it is this hour (0–23) for the day/night look — handy for testing, unset normally. */
+  debugHour: number | undefined = undefined;
 
   constructor() {
     onServerEvent('bubble', (d) => {
@@ -90,10 +132,14 @@ class Engine {
       if (key === 'gotIt') play('note');
       if (key === 'oops') play('error');
       if (key === 'ask' || key === 'revise') play('review');
+      this.emote(agentId, key === 'oops' ? 'anger' : key === 'ask' ? 'question' : key === 'revise' ? 'sweat' : key === 'done' ? 'heart' : null);
     });
     onServerEvent('stage-done', (d) => {
       const va = this.agents.get((d as { agentId: string }).agentId);
-      if (va) this.burst(va.x, va.y - 24);
+      if (va) {
+        this.burst(va.x, va.y - 24);
+        va.emote = { kind: 'heart', t: 2.5 };
+      }
       play('done');
     });
     onServerEvent('handoff', (d) => this.handoff(d as { from: string; to: string }));
@@ -131,7 +177,15 @@ class Engine {
 
   cheer(agentIds: string[]): void {
     const text = translate(useStore.getState().settings.lang, 'bubble_yay');
-    for (const id of agentIds) this.say(id, text, 2);
+    for (const id of agentIds) {
+      this.say(id, text, 2);
+      this.emote(id, 'heart', 3);
+    }
+  }
+
+  emote(agentId: string, kind: EmoteKind | null, t = 2.5): void {
+    const va = this.agents.get(agentId);
+    if (va && kind) va.emote = { kind, t };
   }
 
   // ─── Frame update ────────────────────────────────────────────────────────
@@ -145,6 +199,7 @@ class Engine {
     let typing = false;
     for (const va of this.agents.values()) {
       if (va.bubble && (va.bubble.t -= dt) <= 0) va.bubble = null;
+      if (va.emote && (va.emote.t -= dt) <= 0) va.emote = null;
       if ((va.blinkT -= dt) <= 0) {
         va.blinking = !va.blinking;
         va.blinkT = va.blinking ? 0.14 : 2.5 + Math.random() * 3;
@@ -155,8 +210,11 @@ class Engine {
       va.moving = false;
       va.taskId = rt?.taskId;
 
+      if (rt?.status === 'trip' || rt?.status === 'working') va.wander = null;
       if (rt?.status === 'trip') {
         this.placeOnTrip(va, runtimeValue(rt, s.clockOffset));
+      } else if (va.wander || (!s.settings.paused && this.maybeWander(va, dt))) {
+        if (!s.settings.paused) this.stepWander(va, dt);
       } else {
         if (va.status === 'walking' || va.status === 'reading') va.slot = null;
         va.x = seat.x;
@@ -189,10 +247,58 @@ class Engine {
         const seat = seatOf(DESKS[a.desk] ?? DESKS[0]);
         this.agents.set(a.id, {
           id: a.id, desk: a.desk, x: seat.x, y: seat.y, facing: 'front', moving: false, walkDist: 0, typeT: 0, status: 'idle', bubble: null,
-          blinkT: 1 + Math.random() * 3, blinking: false, idleSince: this.realTime, slot: null, progress: 0,
+          blinkT: 1 + Math.random() * 3, blinking: false, idleSince: this.realTime, slot: null, progress: 0, emote: null, wander: null,
         });
       } else if (va.desk !== a.desk) {
         va.desk = a.desk;
+      }
+    }
+  }
+
+  /** Idle for a while? Sometimes get a coffee or water a plant. */
+  private maybeWander(va: VisualAgent, dt: number): boolean {
+    if (va.status !== 'idle' || this.realTime - va.idleSince < 15 || Math.random() > dt / 45) return false;
+    if ([...this.agents.values()].filter((o) => o.wander).length >= 2) return false;
+    const desk = DESKS[va.desk] ?? DESKS[0];
+    const coffee = Math.random() < 0.6;
+    const spot = coffee ? SPOTS.coffee : seatOf(desk).x < 200 ? SPOTS.plantL : SPOTS.plantR;
+    const there = pathToSpot(desk, spot, coffee);
+    va.wander = { kind: coffee ? 'coffee' : 'plant', there, len: pathLength(there), d: 0, phase: 'go', stay: coffee ? 4 : 3 };
+    return true;
+  }
+
+  private stepWander(va: VisualAgent, dt: number) {
+    const w = va.wander!;
+    if (w.phase === 'stay') {
+      va.facing = w.kind === 'coffee' ? 'right' : 'back';
+      if (!va.emote) va.emote = { kind: w.kind === 'coffee' ? 'cup' : 'drop', t: w.stay };
+      if (w.kind === 'plant' && Math.random() < dt * 6) {
+        const spot = w.there[w.there.length - 1];
+        this.particles.push({ x: spot.x - 12 + Math.random() * 6, y: spot.y - 14, vx: 0, vy: 12, g: 30, life: 0.6, max: 0.6, color: '#7ec8ff' });
+      }
+      if ((w.stay -= dt) <= 0) {
+        w.phase = 'back';
+        w.d = 0;
+        va.emote = null;
+      }
+      return;
+    }
+    w.d += WANDER_SPEED * dt;
+    const path = w.phase === 'go' ? w.there : [...w.there].reverse();
+    const pos = pointAlong(path, Math.min(w.d, w.len));
+    va.x = pos.p.x;
+    va.y = pos.p.y;
+    va.walkDist = w.d;
+    va.moving = true;
+    va.status = 'walking';
+    va.facing = faceFor(pos.dx, pos.dy);
+    if (w.d >= w.len) {
+      if (w.phase === 'go') w.phase = 'stay';
+      else {
+        va.wander = null;
+        va.status = 'idle';
+        va.idleSince = this.realTime;
+        va.moving = false;
       }
     }
   }
@@ -227,7 +333,7 @@ class Engine {
     va.x = pos.p.x;
     va.y = pos.p.y;
     if (va.status === 'reading') va.facing = 'back';
-    else if (Math.abs(pos.dy) > Math.abs(pos.dx)) va.facing = pos.dy < 0 ? 'back' : 'front';
+    else va.facing = faceFor(pos.dx, pos.dy);
   }
 
   // ─── Effects ─────────────────────────────────────────────────────────────
@@ -291,3 +397,6 @@ class Engine {
 }
 
 export const engine = new Engine();
+
+// Dev only: reach the engine from the console (e.g. paoEngine.debugHour = 21 to see the night).
+if (import.meta.env.DEV) (window as unknown as { paoEngine?: Engine }).paoEngine = engine;

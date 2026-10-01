@@ -25,6 +25,7 @@ import { overallProgress } from '../data/board';
 import { play } from '../lib/sound';
 import { PipelineView } from './BoardModal';
 import { Avatar, ModelLabel, Progress, RoleLabel, ScopeBadge, Stars, Window } from './ui';
+import { PixelIcon } from './PixelIcon';
 
 export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => void; taskId: string }) {
   const t = useT();
@@ -65,7 +66,7 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
     <Window
       z={z}
       width={780}
-      title={`📄 ${task.title}`}
+      title={<><PixelIcon name="task" /> {task.title}</>}
       onClose={onClose}
       footer={
         <>

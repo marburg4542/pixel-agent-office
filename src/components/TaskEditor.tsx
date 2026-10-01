@@ -6,6 +6,7 @@ import { findAnyAgent, useStore, useT, useTeam } from '../store';
 import { roleById } from '../../shared/roles';
 import { Avatar, Window } from './ui';
 import { ResearchFields } from './Newsroom';
+import { PixelIcon } from './PixelIcon';
 
 export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose: () => void; taskId?: string; preset?: Partial<Task> }) {
   const t = useT();
@@ -91,7 +92,7 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
     <Window
       z={z}
       width={640}
-      title={existing ? `✏️ ${t('editTaskTitle')}` : `＋ ${t('newTaskTitle')}`}
+      title={<><PixelIcon name="task" /> {existing ? t('editTaskTitle') : t('newTaskTitle')}</>}
       onClose={onClose}
       footer={
         <>
