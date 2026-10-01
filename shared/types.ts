@@ -21,6 +21,23 @@ export interface ModelDef {
   priceOut?: number;
   note?: string;
   custom?: boolean;
+  /** Ollama: context length (tokens) to ask for — long briefs and research data need more than the default. */
+  numCtx?: number;
+  /** Largest prompt the model takes, when the provider says (information only). */
+  contextWindow?: number;
+}
+
+/** A model a provider offers to a key (AI settings → pick models). */
+export interface DiscoveredModel {
+  apiId: string;
+  name: string;
+  contextWindow?: number;
+  /** USD per 1M tokens, when the provider publishes it (OpenRouter). */
+  priceIn?: number;
+  priceOut?: number;
+  /** Download size (Ollama). */
+  sizeGb?: number;
+  note?: string;
 }
 
 export type RoleId =

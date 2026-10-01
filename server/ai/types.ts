@@ -1,4 +1,4 @@
-import type { ModelDef } from '../../shared/types';
+import type { DiscoveredModel, ModelDef } from '../../shared/types';
 
 export type KeyFields = Record<string, string>;
 
@@ -25,6 +25,8 @@ export interface ProviderAdapter {
   run(key: KeyFields, req: RunRequest): Promise<RunResult>;
   /** Cheap call that proves the key works. */
   test(key: KeyFields): Promise<void>;
+  /** Models this key can use, as the provider lists them. */
+  listModels?(key: KeyFields): Promise<DiscoveredModel[]>;
 }
 
 export type AiErrorKind = 'auth' | 'rate' | 'quota' | 'refusal' | 'network' | 'model' | 'aborted' | 'other';

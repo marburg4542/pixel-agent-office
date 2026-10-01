@@ -6,7 +6,7 @@ import { sendTo } from '../events';
 import { getUsers, type UserRow } from '../users';
 import { createSeed, makeTask } from '../seed';
 import { DEFAULT_MODELS } from '../../shared/models';
-import { DEFAULT_SETTINGS, MAX_DESKS, MAX_ROOMS, SIM_SPEEDS } from '../../shared/constants';
+import { DEFAULT_SETTINGS, MAX_DESKS, MAX_ROOMS, OLLAMA_CTX_OPTIONS, OLLAMA_DEFAULT_CTX, SIM_SPEEDS } from '../../shared/constants';
 import { ROLES } from '../../shared/roles';
 import { uid } from '../../shared/util';
 import { translate } from '../../shared/i18n';
@@ -236,6 +236,9 @@ const sanitizeModel = (input: Partial<ModelDef>, base?: ModelDef): Partial<Model
   if (input.quality !== undefined) out.quality = num(input.quality, 1, 5);
   if ('priceIn' in input) out.priceIn = price(input.priceIn);
   if ('priceOut' in input) out.priceOut = price(input.priceOut);
+  if (input.note !== undefined) out.note = String(input.note).slice(0, 120) || undefined;
+  if ('numCtx' in input) out.numCtx = input.numCtx === null || input.numCtx === undefined ? undefined : Math.max(OLLAMA_CTX_OPTIONS[0], Math.min(OLLAMA_CTX_OPTIONS[OLLAMA_CTX_OPTIONS.length - 1], Math.round(Number(input.numCtx)) || OLLAMA_DEFAULT_CTX));
+  if (input.contextWindow !== undefined) out.contextWindow = Math.max(0, Math.round(Number(input.contextWindow)) || 0) || undefined;
   if (input.provider !== undefined && !base) {
     const ok = ['anthropic', 'openai', 'google', 'openrouter', 'ollama'].includes(String(input.provider));
     if (!ok) throw new ApiError(400, 'ผู้ให้บริการไม่ถูกต้อง', 'Unknown provider');

@@ -30,3 +30,7 @@ export const TRIP_LEAVE = 0.6;
 
 /** Reviewer agents may send a task back by themselves this many times; after that a person decides. */
 export const MAX_AUTO_REVISIONS = 2;
+
+/** Ollama context length (tokens): asked for when a model doesn't set its own, and the choices in AI settings. */
+export const OLLAMA_DEFAULT_CTX = 8192;
+export const OLLAMA_CTX_OPTIONS = [2048, 4096, 8192, 16384, 32768, 65536, 131072];

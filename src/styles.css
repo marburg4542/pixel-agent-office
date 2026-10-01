@@ -477,6 +477,32 @@ kbd { border: 2px solid var(--ink); border-bottom-width: 3px; background: #fffdf
 .key-ok { background: #d9f5e3; }
 .key-form { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .key-form .input { flex: 1; min-width: 180px; width: auto; }
+
+/* AI settings */
+.ais-top { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
+.ais-usage { border: 2px dashed #d8d0e4; padding: 6px 10px; margin-bottom: 4px; }
+.ais-usage summary { cursor: pointer; font-weight: 700; font-size: 13.5px; }
+.ais-usage[open] summary { margin-bottom: 8px; }
+.ais-used { margin-top: 4px; }
+.ais-models, .ais-found { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ais-models li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 3px 6px; background: #f4efe2; border: 1px solid #e2d9c4; font-size: 13px; }
+.ais-name { font-weight: 700; }
+.ais-id { font-size: 11.5px; color: var(--muted-dark); word-break: break-all; }
+.ais-right { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.ais-warn { background: #fff0c8; }
+.ais-ctx { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.ais-ctx .select { width: auto; padding: 1px 4px; font-size: 12px; }
+.ais-actions { margin-top: 6px; }
+.ais-error { margin-top: 4px; }
+.ais-picker { margin-top: 8px; border-top: 2px dashed #d8d0e4; padding-top: 8px; }
+.ais-found { max-height: 280px; overflow-y: auto; margin-top: 8px; }
+.ais-found label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 3px 6px; cursor: pointer; font-size: 13px; }
+.ais-found label:hover { background: #f4efe2; }
+.ais-found label.added { cursor: default; opacity: 0.75; }
+.ais-meta { font-size: 11.5px; }
+.ais-empty { margin-top: 6px; }
+.ais-callout { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border: 2px solid var(--ink); background: #e9f3ff; padding: 8px 10px; }
+@media (max-width: 640px) { .ais-top { grid-template-columns: 1fr; } }
 .users-table td { vertical-align: middle; }
 input[type='range'] { accent-color: var(--blue); width: 180px; }
 

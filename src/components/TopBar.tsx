@@ -22,7 +22,7 @@ function usePendingCount(isAdmin: boolean): number {
   return count;
 }
 
-type AiState = { kind: 'real' | 'sim' | 'mixed'; hint: string; tab: 'ai' | 'keys' };
+type AiState = { kind: 'real' | 'sim' | 'mixed'; hint: string };
 
 /** Will my agents call real models? (AI on, a key for each agent's provider, budget left.) */
 function useAiState(): AiState {
@@ -33,13 +33,13 @@ function useAiState(): AiState {
   const keys = useStore((s) => s.keys);
   const agents = useStore((s) => s.agents);
   const models = useStore((s) => s.models);
-  if (aiMode === 'sim') return { kind: 'sim', hint: t('aiHint_off'), tab: 'ai' };
-  if (budget > 0 && spent >= budget) return { kind: 'sim', hint: t('aiHint_budget'), tab: 'ai' };
+  if (aiMode === 'sim') return { kind: 'sim', hint: t('aiHint_off') };
+  if (budget > 0 && spent >= budget) return { kind: 'sim', hint: t('aiHint_budget') };
   const hasKey = (provider?: string) => keys.some((k) => k.provider === provider && k.configured);
   const simAgents = agents.filter((a) => !hasKey(models.find((m) => m.id === a.modelId)?.provider));
-  if (!simAgents.length) return { kind: 'real', hint: t('aiHint_real'), tab: 'ai' };
-  if (simAgents.length === agents.length) return { kind: 'sim', hint: t('aiHint_noKeys'), tab: 'keys' };
-  return { kind: 'mixed', hint: t('aiHint_mixed', { names: simAgents.map((a) => a.name).join(', ') }), tab: 'keys' };
+  if (!simAgents.length) return { kind: 'real', hint: t('aiHint_real') };
+  if (simAgents.length === agents.length) return { kind: 'sim', hint: t('aiHint_noKeys') };
+  return { kind: 'mixed', hint: t('aiHint_mixed', { names: simAgents.map((a) => a.name).join(', ') }) };
 }
 
 export function TopBar({ onSignOut }: { onSignOut: () => void }) {
@@ -83,7 +83,7 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
         </svg>
         <span className="brand-name">{t('appTitle')}</span>
       </div>
-      <button className={`ai-badge ai-${ai.kind}`} title={ai.hint} aria-label={`${t(`aiBadge_${ai.kind}`)} — ${ai.hint}`} onClick={() => openModal({ kind: 'settings', tab: ai.tab })}>
+      <button className={`ai-badge ai-${ai.kind}`} title={ai.hint} aria-label={`${t(`aiBadge_${ai.kind}`)} — ${ai.hint}`} onClick={() => openModal({ kind: 'aiSettings' })}>
         {ai.kind === 'real' ? '⚡' : ai.kind === 'mixed' ? '◐' : '🎲'} {t(`aiBadge_${ai.kind}`)}
       </button>
 
@@ -131,8 +131,8 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
         <button className="btn sm" disabled={agents >= seats} title={agents >= seats ? t('officeFull') : ''} onClick={() => openModal({ kind: 'agentEdit' })}>
           <PixelIcon name="hire" /> <span className="tb-label">{t('hire')}</span>
         </button>
-        <button className="btn sm desktop-only" onClick={() => openModal({ kind: 'models' })} aria-label={t('models')}>
-          <PixelIcon name="chip" /> <span className="tb-label">{t('models')}</span>
+        <button className="btn sm desktop-only" onClick={() => openModal({ kind: 'aiSettings' })} aria-label={t('aiSettings')}>
+          <PixelIcon name="chip" /> <span className="tb-label">{t('aiSettings')}</span>
         </button>
         {isAdmin && (
           <button className="btn sm" onClick={() => openModal({ kind: 'users' })} aria-label={t('users_admin')}>

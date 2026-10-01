@@ -306,6 +306,7 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
 function BlockedBox({ task, busy, onRetry }: { task: Task; busy: boolean; onRetry: () => void }) {
   const t = useT();
   const lang = useStore((s) => s.settings.lang);
+  const openModal = useStore((s) => s.openModal);
   const b = task.blocked!;
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -323,7 +324,16 @@ function BlockedBox({ task, busy, onRetry }: { task: Task; busy: boolean; onRetr
         <button className="btn warn" disabled={busy} onClick={onRetry}>↻ {t('blocked_retry')}</button>
       </div>
       {b.reason && <code className="blocked-reason">{b.reason}</code>}
-      {fix && <div className="hint">💡 {t(fix)}</div>}
+      {fix && (
+        <div className="row hint">
+          💡 {t(fix)}
+          {(kind === 'auth' || kind === 'model' || kind === 'quota') && (
+            <button className="btn sm" onClick={() => openModal({ kind: 'aiSettings' })}>
+              <PixelIcon name="chip" /> {t('aiSettings')}
+            </button>
+          )}
+        </div>
+      )}
       {b.until && b.until > now && <div className="hint">⏱ {t('blocked_autoRetry', { time: timeLeft(b.until, lang) })}</div>}
     </div>
   );

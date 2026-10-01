@@ -1,7 +1,18 @@
 import OpenAI from 'openai';
 import type { KeyFields, ProviderAdapter, RunRequest, RunResult } from './types';
+import type { DiscoveredModel } from '../../shared/types';
 
 const client = (key: KeyFields) => new OpenAI({ apiKey: key.key, maxRetries: 2 });
+
+/** Chat/text models in OpenAI's list (it also has embeddings, speech, images…). */
+const CHAT = /^(gpt-|o\d|chatgpt-)/i;
+const NOT_CHAT = /(embed|tts|whisper|dall-e|image|audio|realtime|transcribe|moderation|search)/i;
+
+/** OpenRouter prices are USD per token as strings ("-1" = varies). */
+const perMillion = (v?: string) => {
+  const n = Number(v);
+  return v !== undefined && Number.isFinite(n) && n >= 0 ? Math.round(n * 1e6 * 1000) / 1000 : undefined;
+};
 
 /** OpenAI via the Responses API (streaming, optional built-in web search). */
 export const openaiAdapter: ProviderAdapter = {
@@ -34,6 +45,14 @@ export const openaiAdapter: ProviderAdapter = {
 
   async test(key) {
     await client(key).models.list();
+  },
+
+  async listModels(key) {
+    const out: DiscoveredModel[] = [];
+    for await (const m of client(key).models.list()) {
+      if (CHAT.test(m.id) && !NOT_CHAT.test(m.id)) out.push({ apiId: m.id, name: m.id });
+    }
+    return out.sort((a, b) => a.apiId.localeCompare(b.apiId));
   },
 };
 
@@ -77,5 +96,14 @@ export const openrouterAdapter: ProviderAdapter = {
   async test(key) {
     const res = await fetch('https://openrouter.ai/api/v1/key', { headers: { Authorization: `Bearer ${key.key}` } });
     if (!res.ok) throw new OpenAI.APIError(res.status, undefined, `OpenRouter rejected the key (${res.status})`, res.headers);
+  },
+
+  async listModels(key) {
+    const res = await fetch('https://openrouter.ai/api/v1/models', { headers: { Authorization: `Bearer ${key.key}` } });
+    if (!res.ok) throw new OpenAI.APIError(res.status, undefined, `OpenRouter answered ${res.status}`, res.headers);
+    const json = (await res.json()) as { data?: { id: string; name?: string; context_length?: number; pricing?: { prompt?: string; completion?: string } }[] };
+    return (json.data ?? []).map((m) => ({
+      apiId: m.id, name: m.name || m.id, contextWindow: m.context_length, priceIn: perMillion(m.pricing?.prompt), priceOut: perMillion(m.pricing?.completion),
+    }));
   },
 };

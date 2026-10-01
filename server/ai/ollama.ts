@@ -1,4 +1,6 @@
 import { AiError, type KeyFields, type ProviderAdapter, type RunRequest, type RunResult } from './types';
+import type { DiscoveredModel } from '../../shared/types';
+import { OLLAMA_DEFAULT_CTX } from '../../shared/constants';
 
 const base = (key: KeyFields) => (key.baseUrl || 'http://localhost:11434').replace(/\/$/, '');
 
@@ -22,7 +24,8 @@ export const ollamaAdapter: ProviderAdapter = {
       body: JSON.stringify({
         model: req.model.apiId,
         stream: true,
-        options: { num_predict: req.maxTokens },
+        // Ollama's default context is short and cuts long prompts silently; ask for more.
+        options: { num_predict: req.maxTokens, num_ctx: req.model.numCtx ?? OLLAMA_DEFAULT_CTX },
         messages: [
           { role: 'system', content: req.system },
           { role: 'user', content: req.user },
@@ -69,5 +72,29 @@ export const ollamaAdapter: ProviderAdapter = {
   async test(key) {
     const res = await call(key, '/api/tags');
     if (!res.ok) throw new AiError('network', `Ollama answered ${res.status}`);
+  },
+
+  /** Models pulled on that machine, with size and (when Ollama says) their maximum context. */
+  async listModels(key) {
+    const res = await call(key, '/api/tags');
+    if (!res.ok) throw new AiError('network', `Ollama answered ${res.status}`);
+    const json = (await res.json()) as { models?: { name: string; size?: number; details?: { parameter_size?: string; quantization_level?: string } }[] };
+    const out: DiscoveredModel[] = [];
+    for (const m of json.models ?? []) {
+      let contextWindow: number | undefined;
+      try {
+        const show = await call(key, '/api/show', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m.name }) });
+        if (show.ok) {
+          const info = ((await show.json()) as { model_info?: Record<string, unknown> }).model_info ?? {};
+          const k = Object.keys(info).find((x) => x.endsWith('.context_length'));
+          if (k) contextWindow = Number(info[k]) || undefined;
+        }
+      } catch {
+        /* the size and name are enough */
+      }
+      const note = [m.details?.parameter_size, m.details?.quantization_level].filter(Boolean).join(' · ');
+      out.push({ apiId: m.name, name: m.name, sizeGb: m.size ? Math.round(m.size / 1e8) / 10 : undefined, contextWindow, note: note || undefined });
+    }
+    return out;
   },
 };

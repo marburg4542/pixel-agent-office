@@ -637,6 +637,27 @@ test('a manager plans tasks that nobody was assigned to', async () => {
   await waitForTask(adminToken, site.data.id, (x) => x.column === 'review');
 });
 
+test('AI settings: list the models a key can use, keep Ollama context length', async () => {
+  const ai = await import('../ai');
+  const original = ai.ADAPTERS.anthropic;
+  ai.ADAPTERS.anthropic = { ...original, listModels: async () => [{ apiId: 'claude-test-1', name: 'Claude Test 1' }] };
+  try {
+    const listed = await call('/keys/anthropic/models', { token: adminToken });
+    assert.equal(listed.status, 200, JSON.stringify(listed.json));
+    assert.deepEqual(listed.data, [{ apiId: 'claude-test-1', name: 'Claude Test 1' }]);
+    assert.equal((await call('/keys/anthropic/models', { token: bobToken })).status, 404, 'no key saved');
+    assert.equal((await call('/keys/reddit/models', { token: adminToken })).status, 400, 'not an AI provider');
+  } finally {
+    ai.ADAPTERS.anthropic = original;
+  }
+  const models = (await call('/models', { method: 'POST', token: adminToken, body: { provider: 'ollama', apiId: 'qwen3:4b', name: 'Qwen3 4B', numCtx: 999999, contextWindow: 40960, note: '4.0B · Q4_K_M' } })).data;
+  const added = models.find((m: { apiId: string }) => m.apiId === 'qwen3:4b');
+  assert.equal(added.numCtx, 131072, 'clamped');
+  assert.equal(added.contextWindow, 40960);
+  const updated = (await call(`/models/${added.id}`, { method: 'PUT', token: adminToken, body: { numCtx: 16384 } })).data;
+  assert.equal(updated.find((m: { id: string }) => m.id === added.id).numCtx, 16384);
+});
+
 test('changing email needs the current password', async () => {
   const noPw = await call('/update-profile', { method: 'PUT', token: bobToken, body: { email: 'bob2@test.local' } });
   assert.equal(noPw.status, 400);
