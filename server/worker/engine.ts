@@ -17,6 +17,8 @@ import * as newsroom from '../workspace/newsroom';
 import { normalizeQuery, type ResearchPack, type ResearchResult } from '../../shared/research';
 import { answeredFor, parseQuestion, parseVerdict, simQuestion } from '../sim/collab';
 import { MAX_AUTO_REVISIONS } from '../../shared/constants';
+import { currentSteps, groupRange, isStepActive, openStepFor } from '../../shared/pipeline';
+import { planFor } from '../sim/manager';
 import { TRIP_SECONDS } from '../../shared/constants';
 import type { Agent, AgentRuntime, LiveText, ModelDef, RuntimeStatus, StageOutput, Task } from '../../shared/types';
 
@@ -63,6 +65,10 @@ interface RT {
   startedAt?: number;
   /** Simulated step that will stop early to ask the manager this. */
   simQuestion?: string;
+  /** The pipeline step this agent is working on (several can run at once in a parallel group). */
+  step: number;
+  /** Manager agents: the unplanned task they are walking to the board for. */
+  planTaskId?: string;
 }
 
 const rts = new Map<string, RT>();
@@ -72,7 +78,7 @@ const autoRetries = new Map<string, number>();
 const rtFor = (agentId: string): RT => {
   let rt = rts.get(agentId);
   if (!rt) {
-    rt = { agentId, status: 'idle', tripT: 0, tripBoardDone: false, progress: 0, duration: 1, phase: -1, noteT: 0, decideT: Math.random(), lastSync: 0 };
+    rt = { agentId, status: 'idle', tripT: 0, tripBoardDone: false, progress: 0, duration: 1, phase: -1, noteT: 0, decideT: Math.random(), lastSync: 0, step: 0 };
     rts.set(agentId, rt);
   }
   return rt;
@@ -110,7 +116,19 @@ function readNotes(a: Agent): boolean {
   return true;
 }
 
+/** Tasks a manager is planning right now (so two managers don't plan the same one). */
+const planning = new Set<string>();
+
 function decide(rt: RT, a: Agent) {
+  if (a.role === 'manager') {
+    const todo = store.unplannedFor(a).find((t) => !planning.has(t.id));
+    if (todo) {
+      planning.add(todo.id);
+      Object.assign(rt, { status: 'trip', tripT: 0, tripBoardDone: false, reservedTaskId: undefined, planTaskId: todo.id, taskId: todo.id });
+      sync(rt, a);
+      return;
+    }
+  }
   const unread = store.unreadNotesFor(a);
   const next = store.queueFor(a.id)[0];
   if (!unread.length && !next) return;
@@ -130,12 +148,18 @@ function decide(rt: RT, a: Agent) {
 
 function atBoard(rt: RT, a: Agent) {
   rt.tripBoardDone = true;
+  if (rt.planTaskId) {
+    const id = rt.planTaskId;
+    rt.planTaskId = undefined;
+    plan(a, id);
+    return;
+  }
   const read = readNotes(a);
   const id = rt.reservedTaskId;
   rt.reservedTaskId = undefined;
   if (!id) return;
   const t = store.getTask(id);
-  if (t && t.column === 'todo' && t.pipeline[t.stage] === a.id && !t.active) {
+  if (t && t.column === 'todo' && openStepFor(t, a.id) >= 0) {
     store.claimTask(t.id, a);
     if (!read) bubble(a, 'hmm');
   }
@@ -144,15 +168,17 @@ function atBoard(rt: RT, a: Agent) {
 const modelOf = (a: Agent) => store.modelsOf(a.ownerId).find((m) => m.id === a.modelId);
 
 function startWork(rt: RT, a: Agent, t: Task) {
-  if (t.column !== 'doing' || t.pipeline[t.stage] !== a.id || t.active) return;
+  const step = openStepFor(t, a.id);
+  if (t.column !== 'doing' || step < 0) return;
   if (t.blocked) store.clearBlocked(t.id); // a timed block (rate limit) has expired
   const model = modelOf(a);
   const ai = decideAi(a.ownerId, model);
-  store.setTaskActive(t.id, true);
+  rt.step = step;
+  store.setStepActive(t.id, step, true);
   rt.startedAt = Date.now();
   rt.simQuestion = undefined;
   if (!ai.real && ai.reason === 'budget') store.pushLog(t.id, 'log_budgetSim', { agent: a.name });
-  if (isResearchStep(t)) {
+  if (isResearchStep(t, step)) {
     startResearch(rt, a, t, model, ai.real ? ai.key : null);
     return;
   }
@@ -160,7 +186,8 @@ function startWork(rt: RT, a: Agent, t: Task) {
     startReal(rt, a, t, model, ai.key);
     return;
   }
-  Object.assign(rt, { status: 'working', taskId: t.id, progress: t.stageProgress, duration: stageDuration(t, model), phase: -1, noteT: 2, job: undefined, pending: undefined });
+  const done = currentSteps(t).length > 1 ? (t.stepProgress?.[step] ?? 0) : t.stageProgress;
+  Object.assign(rt, { status: 'working', taskId: t.id, progress: done, duration: stageDuration(t, model), phase: -1, noteT: 2, job: undefined, pending: undefined });
   rt.simQuestion = simQuestion(t, store.langOf(a.ownerId)) ?? undefined;
   sync(rt, a);
 }
@@ -170,9 +197,9 @@ function toIdle(rt: RT, a: Agent) {
   sync(rt, a);
 }
 
-/** Still this agent's step on a task that's in progress? */
-const stillMine = (t: Task | undefined, a: Agent, stage?: number): t is Task =>
-  !!t && t.active && t.column === 'doing' && t.pipeline[t.stage] === a.id && (stage === undefined || t.stage === stage);
+/** Is this agent still working step `step` of a task in progress (not moved, restarted or redone)? */
+const stillMine = (t: Task | undefined, a: Agent, step: number): t is Task =>
+  !!t && t.column === 'doing' && t.pipeline[step] === a.id && currentSteps(t).includes(step) && isStepActive(t, step);
 
 function advancePhase(rt: RT, a: Agent, t: Task) {
   const phase = PHASE_AT.filter((p) => rt.progress >= p).length - 1;
@@ -185,18 +212,19 @@ function advancePhase(rt: RT, a: Agent, t: Task) {
 /** One simulated step: progress follows the model's speed and the task size. */
 function simWork(rt: RT, a: Agent, dt: number) {
   const t = rt.taskId ? store.getTask(rt.taskId) : undefined;
-  if (!stillMine(t, a)) {
+  if (!stillMine(t, a, rt.step)) {
     // Moved, edited or deleted under us — the store already cleared `active`.
     toIdle(rt, a);
     return;
   }
   // Someone restarted or sent the step back while we worked on it.
-  if (t.stageProgress + 2 < Math.floor(rt.progress)) rt.progress = t.stageProgress;
+  const shown = currentSteps(t).length > 1 ? (t.stepProgress?.[rt.step] ?? 0) : t.stageProgress;
+  if (shown + 2 < Math.floor(rt.progress)) rt.progress = shown;
 
   rt.progress += (dt / rt.duration) * 100;
   advancePhase(rt, a, t);
   if (rt.simQuestion && rt.progress >= 8) {
-    store.setTaskProgress(t.id, Math.floor(rt.progress));
+    store.setTaskProgress(t.id, Math.floor(rt.progress), rt.step);
     ask(rt, a, t, rt.simQuestion);
     return;
   }
@@ -206,51 +234,51 @@ function simWork(rt: RT, a: Agent, dt: number) {
   }
   if (rt.progress >= 100 && rt.pending) {
     complete(rt, a, t, {
-      stage: t.stage, agentId: a.id, agentName: a.name, modelId: a.modelId, modelName: modelOf(a)?.name ?? a.modelId,
+      stage: rt.step, agentId: a.id, agentName: a.name, modelId: a.modelId, modelName: modelOf(a)?.name ?? a.modelId,
       text: rt.pending.text, score: 0, at: Date.now(), simulated: true, research: rt.pending.research,
     });
     return;
   }
   if (rt.progress >= 100) {
-    const ctx = buildStageContext({ notes: store.notesFor(a), models: store.modelsOf(a.ownerId), findAgent: store.getAgent }, t, a);
+    const ctx = contextFor(a, t, rt.step);
     const { text, score } = simulateOutput(ctx, store.langOf(a.ownerId));
     complete(rt, a, t, {
-      stage: t.stage, agentId: a.id, agentName: a.name, modelId: a.modelId, modelName: ctx.model?.name ?? a.modelId,
+      stage: rt.step, agentId: a.id, agentName: a.name, modelId: a.modelId, modelName: ctx.model?.name ?? a.modelId,
       text, score, at: Date.now(), simulated: true,
     });
     return;
   }
-  store.setTaskProgress(t.id, Math.floor(rt.progress));
+  store.setTaskProgress(t.id, Math.floor(rt.progress), rt.step);
 }
 
 // ─── Real model calls ────────────────────────────────────────────────────────
 
-const newJob = (t: Task, model: ModelDef): Job => ({
-  controller: new AbortController(), taskId: t.id, stage: t.stage, model, text: '', startedAt: Date.now(), callStartedAt: Date.now(),
+const newJob = (t: Task, step: number, model: ModelDef): Job => ({
+  controller: new AbortController(), taskId: t.id, stage: step, model, text: '', startedAt: Date.now(), callStartedAt: Date.now(),
   expected: expectedChars(t.size), lastStream: 0,
 });
 
-const contextFor = (a: Agent, t: Task) => buildStageContext({ notes: store.notesFor(a), models: store.modelsOf(a.ownerId), findAgent: store.getAgent }, t, a);
+const contextFor = (a: Agent, t: Task, step: number) => buildStageContext({ notes: store.notesFor(a), models: store.modelsOf(a.ownerId), findAgent: store.getAgent }, t, a, step);
 
 function startReal(rt: RT, a: Agent, t: Task, model: ModelDef, key: KeyFields) {
   readNotes(a); // pick up anything new before writing the prompt
-  const job = newJob(t, model);
+  const job = newJob(t, rt.step, model);
   Object.assign(rt, { status: 'working', taskId: t.id, progress: 1, duration: 1, phase: -1, noteT: 2, job, pending: undefined });
   sync(rt, a);
-  callModel(rt, a, job, key, buildPrompt(contextFor(a, t), store.langOf(a.ownerId)), WEB_SEARCH_ROLES.has(a.role));
+  callModel(rt, a, job, key, buildPrompt(contextFor(a, t, rt.step), store.langOf(a.ownerId)), WEB_SEARCH_ROLES.has(a.role));
 }
 
 /** The analyst step of a research task: the first analyst in the pipeline, else the first step. */
-function isResearchStep(t: Task): boolean {
+function isResearchStep(t: Task, step: number): boolean {
   if (!t.research) return false;
   const analyst = t.pipeline.findIndex((id) => store.getAgent(id)?.role === 'analyst');
-  return t.stage === (analyst >= 0 ? analyst : 0);
+  return step === (analyst >= 0 ? analyst : 0);
 }
 
 /** Gather news & social data, then let the model read it (real AI) or estimate sentiment from word lists. */
 function startResearch(rt: RT, a: Agent, t: Task, model: ModelDef | undefined, key: KeyFields | null) {
   readNotes(a);
-  const job: Job = { ...newJob(t, model ?? ({ id: a.modelId, name: a.modelId } as ModelDef)), gathering: true };
+  const job: Job = { ...newJob(t, rt.step, model ?? ({ id: a.modelId, name: a.modelId } as ModelDef)), gathering: true };
   Object.assign(rt, { status: 'working', taskId: t.id, progress: 1, duration: 1, phase: -1, noteT: 2, job, pending: undefined });
   const query = normalizeQuery(t.research, t.title);
   store.pushLog(t.id, 'log_gathering', { agent: a.name, query: query.query });
@@ -269,7 +297,7 @@ function startResearch(rt: RT, a: Agent, t: Task, model: ModelDef | undefined, k
       store.pushLog(cur.id, 'log_gathered', { agent: a.name, news: pack.news.length, posts: pack.posts.length, sources: pack.sources.filter((x) => x.ok).length });
       const lang = store.langOf(a.ownerId);
       if (key && model) {
-        const prompt = buildPrompt(contextFor(a, cur), lang);
+        const prompt = buildPrompt(contextFor(a, cur, job.stage), lang);
         const webSearch = query.sources.includes('web');
         job.callStartedAt = Date.now();
         job.expected = Math.max(job.expected, 6000);
@@ -312,7 +340,7 @@ function callModel(rt: RT, a: Agent, job: Job, key: KeyFields, prompt: { system:
       const cost = costOf(model, res.tokensIn, res.tokensOut);
       addUsage(a.ownerId, model, res.tokensIn, res.tokensOut, cost, a.id);
       const question = parseQuestion(res.text);
-      if (question && !answeredFor(cur, cur.stage).length) {
+      if (question && !answeredFor(cur, job.stage).length) {
         sendTo([a.ownerId], 'usage-changed', {});
         ask(rt, a, cur, question);
         return;
@@ -327,7 +355,7 @@ function callModel(rt: RT, a: Agent, job: Job, key: KeyFields, prompt: { system:
         research = { pack: job.pack, analysis: read.analysis };
       }
       complete(rt, a, cur, {
-        stage: cur.stage, agentId: a.id, agentName: a.name, modelId: model.id, modelName: model.name,
+        stage: job.stage, agentId: a.id, agentName: a.name, modelId: model.id, modelName: model.name,
         text: text + cut, score: 0, at: Date.now(), simulated: false,
         tokensIn: res.tokensIn, tokensOut: res.tokensOut, costUsd: cost, research,
       });
@@ -371,7 +399,7 @@ function realWork(rt: RT, a: Agent) {
       : g + Math.min(9, (now - job.callStartedAt) / 2500);
   rt.progress = Math.max(rt.progress, target);
   advancePhase(rt, a, t);
-  store.setTaskProgress(t.id, Math.floor(rt.progress));
+  store.setTaskProgress(t.id, Math.floor(rt.progress), job.stage);
   if (now - job.lastStream > 800 && job.text) {
     job.lastStream = now;
     sendTo(store.taskFeedAudience(t), 'task-stream', { id: t.id, stage: job.stage, text: job.text.slice(-6000), agentId: a.id });
@@ -382,7 +410,7 @@ function realWork(rt: RT, a: Agent) {
 /** Shared ending for simulated and real steps: store the result, celebrate, hand off. */
 function ask(rt: RT, a: Agent, t: Task, question: string) {
   rt.simQuestion = undefined;
-  store.askQuestion(t.id, a, question);
+  store.askQuestion(t.id, a, question, rt.step);
   bubble(a, 'ask');
   toIdle(rt, a);
 }
@@ -391,7 +419,7 @@ function complete(rt: RT, a: Agent, t: Task, output: StageOutput) {
   output.startedAt ??= rt.startedAt;
   // A reviewer may send the work back by itself (a few rounds), instead of handing it on.
   const verdict = a.role === 'reviewer' ? parseVerdict(output.text) : null;
-  if (verdict?.kind === 'revise' && verdict.stage >= 0 && verdict.stage < t.stage && (t.autoRevisions ?? 0) < MAX_AUTO_REVISIONS) {
+  if (verdict?.kind === 'revise' && verdict.stage >= 0 && verdict.stage < groupRange(t, output.stage)[0] && (t.autoRevisions ?? 0) < MAX_AUTO_REVISIONS) {
     store.autoRevise(t.id, a, output, verdict.stage, verdict.feedback);
     bubble(a, 'revise');
     toIdle(rt, a);
@@ -408,12 +436,14 @@ function complete(rt: RT, a: Agent, t: Task, output: StageOutput) {
   }
   const audience = store.taskFeedAudience(t);
   store.pushFeed(audience, 'feed_stageDone', { agent: a.name, task: t.title });
-  if (res.next) {
-    const next = store.getAgent(res.next);
-    if (next) {
-      store.pushFeed(audience, 'feed_handoff', { agent: a.name, next: next.name, task: t.title });
-      sendTo([...new Set([a.ownerId, next.ownerId])], 'handoff', { from: a.id, to: next.id, taskId: t.id });
-    }
+  if (res.waiting) {
+    // Teammates in the same parallel group are still working; the hand-off happens when they finish.
+  } else if (res.next.length) {
+    const next = res.next.map((id) => store.getAgent(id)).filter((x): x is Agent => !!x);
+    store.pushFeed(audience, 'feed_handoff', { agent: a.name, next: next.map((n) => n.name).join(' + '), task: t.title });
+    // In a parallel group every finished teammate's paper flies to the next desks.
+    const from = res.next.length && currentSteps(t).length > 1 ? currentSteps(t).map((i) => t.pipeline[i]) : [a.id];
+    for (const n of next) for (const f of from) sendTo([...new Set([a.ownerId, n.ownerId, store.getAgent(f)?.ownerId ?? a.ownerId])], 'handoff', { from: f, to: n.id, taskId: t.id });
   } else {
     store.pushFeed(audience, res.column === 'review' ? 'feed_review' : 'feed_done', { task: t.title });
   }
@@ -440,6 +470,54 @@ function step(rt: RT, a: Agent, dt: number) {
       if (!rt.job) simWork(rt, a, dt);
       break;
   }
+}
+
+// ─── Manager: plan tasks nobody was assigned to ─────────────────────────────
+
+function plan(a: Agent, taskId: string) {
+  const t = store.getTask(taskId);
+  if (!t || t.pipeline.length || t.column !== 'todo') {
+    planning.delete(taskId);
+    return;
+  }
+  const team = store.agentsOf(a.ownerId).filter((x) => x.role !== 'manager');
+  const model = modelOf(a);
+  const ai = decideAi(a.ownerId, model);
+  const apply = (steps: string[][], reason: string) => {
+    planning.delete(taskId);
+    if (store.planTask(taskId, a, steps, reason)) bubble(a, 'planned');
+  };
+  if (!ai.real || !model) {
+    apply(planFor(t, team, store.langOf(a.ownerId)).steps, '');
+    return;
+  }
+  const roster = team.map((x) => `- ${x.name} (${x.role}${x.roleLabel ? `: ${x.roleLabel}` : ''})${x.instructions ? ` — ${x.instructions.slice(0, 160)}` : ''}`).join('\n');
+  const system = [
+    `You are ${a.name}, the manager of a small AI team. Decide who works on a task and in what order.`,
+    'Steps run one after another; put teammates in the same step when their parts can be done at the same time without each other.',
+    'Use only the teammates listed, each at most once, and keep it short — usually 2–4 steps. End with a reviewer when there is one.',
+    'Reply with ONLY a JSON object: {"steps": [["Name"], ["Name", "Name"]], "reason": "one short sentence"}.',
+    `Teammates:\n${roster}`,
+  ].join('\n');
+  const controller = new AbortController();
+  runModel(ai.key, { model, system, user: `# Task: ${t.title}\n\n${t.description}`, maxTokens: 600, webSearch: false, signal: controller.signal, onText: () => {} }).then(
+    (res) => {
+      addUsage(a.ownerId, model, res.tokensIn, res.tokensOut, costOf(model, res.tokensIn, res.tokensOut), a.id);
+      sendTo([a.ownerId], 'usage-changed', {});
+      const byName = new Map(team.map((x) => [x.name.toLowerCase(), x.id]));
+      try {
+        const raw = JSON.parse(/\{[\s\S]*\}/.exec(res.text)?.[0] ?? '{}') as { steps?: unknown; reason?: unknown };
+        const steps = (Array.isArray(raw.steps) ? raw.steps : [])
+          .map((g) => (Array.isArray(g) ? g : [g]).map((n) => byName.get(String(n).toLowerCase().trim())).filter((id): id is string => !!id))
+          .filter((g) => g.length);
+        if (steps.length) return apply(steps, String(raw.reason ?? '').slice(0, 200));
+      } catch {
+        /* fall back below */
+      }
+      apply(planFor(t, team, store.langOf(a.ownerId)).steps, '');
+    },
+    () => apply(planFor(t, team, store.langOf(a.ownerId)).steps, ''),
+  );
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -498,7 +576,7 @@ export function runtimeFor(agents: Agent[]): AgentRuntime[] {
 export function liveTextFor(taskIds: Set<string>): Record<string, LiveText> {
   const out: Record<string, LiveText> = {};
   for (const [agentId, rt] of rts) {
-    if (rt.job && !rt.job.gathering && taskIds.has(rt.job.taskId)) out[rt.job.taskId] = { stage: rt.job.stage, text: rt.job.text.slice(-6000), agentId };
+    if (rt.job && !rt.job.gathering && taskIds.has(rt.job.taskId)) out[`${rt.job.taskId}:${rt.job.stage}`] = { stage: rt.job.stage, text: rt.job.text.slice(-6000), agentId };
   }
   return out;
 }

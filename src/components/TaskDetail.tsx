@@ -9,6 +9,7 @@ import type { ColumnId, Lang, Task } from '../types';
 import { Markdown } from './Markdown';
 import { ResearchView } from './ResearchView';
 import { ArenaSetup, ArenaView, QaHistory, QuestionBox } from './Collab';
+import { currentSteps, groupRange, isStepActive, isStepDone } from '../../shared/pipeline';
 
 /** All step results as one Markdown document. */
 function resultsMarkdown(task: Task, lang: Lang): string {
@@ -34,7 +35,7 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
   const me = useStore((s) => s.user!);
   const team = useTeam();
   const allNotes = useStore((s) => s.notes);
-  const live = useStore((s) => s.live[taskId]);
+  const liveAll = useStore((s) => s.live);
   const { openModal, approveTask, requestChanges, restartTask, moveTask, retryTask } = useStore.getState();
   const [fbOpen, setFbOpen] = useState(false);
   const [fbText, setFbText] = useState('');
@@ -183,17 +184,24 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
         {task.pipeline.map((id, i) => {
           const a = findAnyAgent(team, id);
           const out = [...task.outputs].reverse().find((o) => o.stage === i);
-          const isCurrent = i === task.stage && task.column !== 'done';
-          const liveHere = isCurrent && task.active && live?.stage === i;
+          const group = currentSteps(task);
+          const isCurrent = group.includes(i) && task.column !== 'done';
+          const working = isCurrent && isStepActive(task, i);
+          const progress = group.length > 1 ? (task.stepProgress?.[i] ?? 0) : task.stageProgress;
+          const live = liveAll[`${taskId}:${i}`];
+          const liveHere = working && !!live;
+          const [gStart, gEnd] = groupRange(task, i);
+          const parallel = gEnd - gStart > 1;
           let state: string;
-          if (i < task.stage || task.stage >= task.pipeline.length) state = '✅';
-          else if (isCurrent && task.active) state = `⚙ ${Math.floor(task.stageProgress)}%`;
+          if (isStepDone(task, i) || task.stage >= task.pipeline.length) state = '✅';
+          else if (working) state = `⚙ ${Math.floor(progress)}%`;
           else if (isCurrent) state = '⏳';
           else state = '·';
           return (
-            <div className="stage-item" key={`${id}-${i}`}>
+            <div className={`stage-item ${parallel ? 'parallel' : ''} ${parallel && i === gStart ? 'group-start' : ''}`} key={`${id}-${i}`}>
               <div className="stage-head">
                 <strong>{t('stage')} {i + 1}</strong>
+                {parallel && <span className="chip parallel-chip" title={t('parallelHint')}>⇉ {t('parallel')}</span>}
                 {a && <Avatar look={a.look} size={30} />}
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 700 }}>
@@ -216,15 +224,15 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
                   <strong>{state}</strong>
                 </span>
               </div>
-              {isCurrent && task.active && (
+              {working && (
                 <div style={{ padding: '6px 10px 0' }}>
-                  <Progress value={task.stageProgress} thin />
+                  <Progress value={progress} thin />
                 </div>
               )}
               {liveHere ? (
                 <div className="stage-out live" aria-live="polite" aria-busy="true">
                   <div className="live-label">✍️ {t('liveTyping', { name: a?.name ?? '?' })}</div>
-                  <Markdown text={live!.text} />
+                  <Markdown text={live.text} />
                 </div>
               ) : out ? (
                 <div className="stage-out">

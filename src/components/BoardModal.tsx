@@ -6,6 +6,7 @@ import { COLUMNS, NOTE_COLORS } from '../../shared/constants';
 import { overallProgress } from '../data/board';
 import { Avatar, Progress, ScopeBadge, Window } from './ui';
 import { PixelIcon, type IconName } from './PixelIcon';
+import { currentSteps, groupsOf, isStepDone } from '../../shared/pipeline';
 
 type ScopeFilter = 'all' | Scope;
 
@@ -174,22 +175,28 @@ function QuickAdd({ column, scope }: { column: ColumnId; scope: Scope }) {
 
 export function PipelineView({ task, size = 26 }: { task: Task; size?: number }) {
   const s = useTeam();
+  // Parallel groups stack vertically between the arrows.
   return (
     <div className="pipeline">
-      {task.pipeline.map((id, i) => {
-        const a = findAnyAgent(s, id);
-        const state = i < task.stage ? 'done' : i === task.stage && task.column !== 'done' ? 'current' : '';
-        const title = a ? (a.mine ? a.name : `${a.name} · ${a.ownerName}`) : '?';
-        return (
-          <span key={`${id}-${i}`} style={{ display: 'contents' }}>
-            {i > 0 && <span className="pipe-arrow">▶</span>}
-            <span className={`pipe-step ${state} ${a && !a.mine ? 'team' : ''}`} style={{ width: size, height: size + 2 }} title={title}>
-              {a ? <Avatar look={a.look} size={size - 4} /> : '?'}
-              {state === 'done' && <span className="check">✓</span>}
-            </span>
+      {groupsOf(task).map((group, g) => (
+        <span key={group.join('-')} style={{ display: 'contents' }}>
+          {g > 0 && <span className="pipe-arrow">▶</span>}
+          <span className={group.length > 1 ? 'pipe-group' : 'pipe-single'}>
+            {group.map((i) => {
+              const id = task.pipeline[i];
+              const a = findAnyAgent(s, id);
+              const state = isStepDone(task, i) || task.stage >= task.pipeline.length ? 'done' : currentSteps(task).includes(i) && task.column !== 'done' ? 'current' : '';
+              const title = a ? (a.mine ? a.name : `${a.name} · ${a.ownerName}`) : '?';
+              return (
+                <span key={`${id}-${i}`} className={`pipe-step ${state} ${a && !a.mine ? 'team' : ''}`} style={{ width: size, height: size + 2 }} title={title}>
+                  {a ? <Avatar look={a.look} size={size - 4} /> : '?'}
+                  {state === 'done' && <span className="check">✓</span>}
+                </span>
+              );
+            })}
           </span>
-        );
-      })}
+        </span>
+      ))}
     </div>
   );
 }
@@ -220,7 +227,8 @@ function TaskCard(props: {
   else if (task.blocked && (task.column === 'todo' || task.column === 'doing')) {
     const kind = ['auth', 'quota', 'rate', 'network', 'refusal', 'model'].includes(task.blocked.kind) ? task.blocked.kind : 'other';
     [icon, label, warn] = ['blocked', `${t('blocked_short')}: ${t(`blocked_${kind}`)}`, true];
-  } else if (current && task.active) [icon, label] = ['gear', t('workingOn', { name: current.name, p: Math.floor(task.stageProgress) })];
+  } else if (current && task.active && currentSteps(task).length > 1) [icon, label] = ['gear', t('workingTogether', { n: task.groupActive?.length ?? 1, p: Math.floor(task.stageProgress) })];
+  else if (current && task.active) [icon, label] = ['gear', t('workingOn', { name: current.name, p: Math.floor(task.stageProgress) })];
   else if (current && (task.column === 'todo' || task.column === 'doing')) [icon, label] = ['queued', t('queuedFor', { name: current.name })];
   const status = icon ? (
     <>

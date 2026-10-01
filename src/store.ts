@@ -6,6 +6,7 @@ import type {
   UserSettings, Watchlist, WatchSummary, Workspace,
 } from './types';
 import { DEFAULT_SETTINGS } from '../shared/constants';
+import { isStepActive } from '../shared/pipeline';
 import { translate } from '../shared/i18n';
 import { API_BASE, api } from './lib/api';
 import { session } from './lib/session';
@@ -26,8 +27,10 @@ interface Data {
   runtime: Record<string, AgentRuntime>;
   keys: ApiKeyStatus[];
   usage: UsageSummary;
-  /** Text a real model is writing right now, by task id. */
+  /** Text a real model is writing right now, by "taskId:step". */
   live: Record<string, LiveText>;
+  /** The room shown in the office (0 = first). */
+  room: number;
   watchlists: Watchlist[];
   watchSummaries: WatchSummary[];
   /** serverTime − Date.now(), to extrapolate runtime values that carry server timestamps. */
@@ -39,6 +42,7 @@ interface Actions {
   load: (ws: Workspace) => void;
   reset: () => void;
   setUser: (u: PublicUser) => void;
+  setRoom: (room: number) => void;
 
   setLang: (l: Lang) => void;
   updateSettings: (patch: Partial<UserSettings>) => Promise<void>;
@@ -110,6 +114,7 @@ const empty = (): Data => ({
   keys: [],
   usage: { month: '', costUsd: 0, tokensIn: 0, tokensOut: 0, calls: 0, byModel: [] },
   live: {},
+  room: 0,
   watchlists: [],
   watchSummaries: [],
   clockOffset: 0,
@@ -197,6 +202,7 @@ export const useStore = create<State>()((set, get) => {
     },
     reset: () => set({ ...empty(), modals: [] }),
     setUser: (user) => set({ user }),
+    setRoom: (room) => set({ room }),
 
     setLang: (lang) => {
       session.setLang(lang);
@@ -343,17 +349,18 @@ export const useStore = create<State>()((set, get) => {
       switch (name) {
         case 'task': {
           const t = data as Task;
-          const live = s.live[t.id];
-          // The streamed text is replaced by the stored result once the step ends.
-          if (live && (!t.active || t.stage !== live.stage)) {
-            const { [t.id]: _, ...rest } = s.live;
-            set({ tasks: upsert(s.tasks, t), live: rest });
+          // The streamed text is replaced by the stored result once its step ends.
+          const stale = Object.keys(s.live).filter((k) => k.startsWith(`${t.id}:`) && !isStepActive(t, Number(k.slice(t.id.length + 1))));
+          if (stale.length) {
+            const live = { ...s.live };
+            for (const k of stale) delete live[k];
+            set({ tasks: upsert(s.tasks, t), live });
           } else set({ tasks: upsert(s.tasks, t) });
           break;
         }
         case 'task-stream': {
           const l = data as LiveText & { id: string };
-          set({ live: { ...s.live, [l.id]: { stage: l.stage, text: l.text, agentId: l.agentId } } });
+          set({ live: { ...s.live, [`${l.id}:${l.stage}`]: { stage: l.stage, text: l.text, agentId: l.agentId } } });
           break;
         }
         case 'keys-changed':
@@ -379,9 +386,9 @@ export const useStore = create<State>()((set, get) => {
           set({ tasks: without(s.tasks, (data as { id: string }).id) });
           break;
         case 'task-progress': {
-          const p = data as { id: string; stageProgress: number; active: boolean };
+          const p = data as { id: string; stageProgress: number; active: boolean; stepProgress?: Record<number, number> };
           const t = s.tasks.find((x) => x.id === p.id);
-          if (t) set({ tasks: upsert(s.tasks, { ...t, stageProgress: p.stageProgress, active: p.active }) });
+          if (t) set({ tasks: upsert(s.tasks, { ...t, stageProgress: p.stageProgress, active: p.active, stepProgress: p.stepProgress ?? t.stepProgress }) });
           break;
         }
         case 'note':

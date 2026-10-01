@@ -574,6 +574,69 @@ test('stats cover agents, models, spending and the team', async () => {
   assert.ok(bobStats.agents.filter((a: { mine: boolean }) => !a.mine).every((a: { costUsd: number | null }) => a.costUsd === null), "teammates' spending stays private");
 });
 
+test('parallel groups: teammates in a group work at the same time, then hand on together', async () => {
+  const ws = (await call('/workspace', { token: adminToken })).data;
+  const byRole = (r: string) => ws.agents.find((a: { role: string }) => a.role === r);
+  const [planner, designer, writer, reviewer] = ['planner', 'designer', 'writer', 'reviewer'].map(byRole);
+  const created = await call('/tasks', {
+    method: 'POST',
+    token: adminToken,
+    body: { title: 'Bakery site', description: 'A long enough brief for a bakery website.', pipeline: [planner.id, designer.id, writer.id, reviewer.id], groups: [0, 1, 1, 2], size: 'S', priority: 'high' },
+  });
+  assert.deepEqual(created.data.groups, [0, 1, 1, 2]);
+  let together = false;
+  let t;
+  for (let i = 0; i < 400; i++) {
+    t = (await call('/workspace', { token: adminToken })).data.tasks.find((x: { id: string }) => x.id === created.data.id);
+    if (t.groupActive?.length === 2) together = true;
+    if (t.column === 'review') break;
+    worker.tick(1);
+    await new Promise((r) => setTimeout(r, 2));
+  }
+  assert.equal(t.column, 'review');
+  assert.ok(together, 'designer and writer worked at the same time');
+  assert.deepEqual(t.outputs.map((o: { stage: number }) => o.stage).sort(), [0, 1, 2, 3]);
+  assert.ok(t.log.some((l: { key: string; params?: { next?: string } }) => l.key === 'log_handoff' && l.params?.next === `${designer.name} + ${writer.name}`));
+
+  // Sending the writer back restarts their whole group.
+  const back = await call(`/tasks/${created.data.id}/request-changes`, { method: 'POST', token: adminToken, body: { agentId: writer.id, text: 'Shorter please' } });
+  assert.equal(back.data.stage, 1);
+  assert.equal(back.data.groupDone, undefined);
+});
+
+test('rooms: more than 8 agents, one room at a time', async () => {
+  const ws = (await call('/workspace', { token: adminToken })).data;
+  assert.equal(ws.agents.length, 8);
+  assert.deepEqual(ws.settings.rooms, ['']);
+  const full = await call('/agents', { method: 'POST', token: adminToken, body: { name: 'Max', role: 'manager', modelId: ws.models[0].id, desk: 0 } });
+  assert.equal(full.status, 400, 'one room is full');
+  await call('/settings', { method: 'PUT', token: adminToken, body: { rooms: ['', 'Team B'] } });
+  const hired = await call('/agents', { method: 'POST', token: adminToken, body: { name: 'Max', role: 'manager', modelId: ws.models[0].id, desk: 0, room: 1 } });
+  assert.equal(hired.status, 200, JSON.stringify(hired.json));
+  assert.equal(hired.data.room, 1);
+  const twice = await call('/agents', { method: 'POST', token: adminToken, body: { name: 'Max2', role: 'writer', modelId: ws.models[0].id, desk: 0, room: 1 } });
+  assert.equal(twice.status, 400, 'desk taken in that room');
+  const shrink = await call('/settings', { method: 'PUT', token: adminToken, body: { rooms: [''] } });
+  assert.equal(shrink.status, 400, "can't remove a room with people in it");
+});
+
+test('a manager plans tasks that nobody was assigned to', async () => {
+  const ws = (await call('/workspace', { token: adminToken })).data;
+  const manager = ws.agents.find((a: { role: string }) => a.role === 'manager');
+  assert.ok(manager);
+  const blog = await call('/tasks', { method: 'POST', token: adminToken, body: { title: 'Write a blog post about cold brew', size: 'S', priority: 'high' } });
+  const site = await call('/tasks', { method: 'POST', token: adminToken, body: { title: 'Landing page for a bakery website', size: 'S', priority: 'high' } });
+  const planned = async (id: string) => waitForTask(adminToken, id, (x) => x.pipeline.length > 0);
+  const b = await planned(blog.data.id);
+  const roleOf = (id: string) => ws.agents.find((a: { id: string }) => a.id === id)?.role;
+  assert.deepEqual(b.pipeline.map(roleOf), ['writer', 'reviewer']);
+  assert.ok(b.log.some((l: { key: string; params?: { agent?: string } }) => l.key === 'log_planned' && l.params?.agent === manager.name));
+  const s = await planned(site.data.id);
+  assert.deepEqual(s.pipeline.map(roleOf), ['planner', 'designer', 'writer', 'reviewer']);
+  assert.deepEqual(s.groups, [0, 1, 1, 2], 'designer and writer in parallel');
+  await waitForTask(adminToken, site.data.id, (x) => x.column === 'review');
+});
+
 test('changing email needs the current password', async () => {
   const noPw = await call('/update-profile', { method: 'PUT', token: bobToken, body: { email: 'bob2@test.local' } });
   assert.equal(noPw.status, 400);

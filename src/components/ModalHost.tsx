@@ -76,7 +76,7 @@ function ModalView({ modal, z }: { modal: Modal; z: number }) {
     case 'noteEdit':
       return <NoteEditor z={z} onClose={onClose} noteId={modal.noteId} preset={modal.preset} />;
     case 'agentEdit':
-      return <AgentEditor z={z} onClose={onClose} agentId={modal.agentId} desk={modal.desk} />;
+      return <AgentEditor z={z} onClose={onClose} agentId={modal.agentId} desk={modal.desk} room={modal.room} />;
     case 'agent':
       return <AgentDetail z={z} onClose={onClose} agentId={modal.agentId} />;
     case 'models':

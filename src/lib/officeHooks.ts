@@ -23,7 +23,7 @@ export function useShortcuts(): void {
       if (k === 'b') run(() => (top?.kind === 'board' ? s.closeModal() : s.openModal({ kind: 'board' })));
       else if (k === 'n') run(() => s.openModal({ kind: 'taskEdit' }));
       else if (k === 'm') run(() => s.openModal({ kind: 'noteEdit' }));
-      else if (k === 'h' && s.agents.length < MAX_DESKS) run(() => s.openModal({ kind: 'agentEdit' }));
+      else if (k === 'h' && s.agents.length < MAX_DESKS * (s.settings.rooms?.length || 1)) run(() => s.openModal({ kind: 'agentEdit' }));
       else if (k === 's') run(() => s.openModal({ kind: 'settings' }));
       else if (k === '?' || (e.shiftKey && k === '/')) run(() => s.openModal({ kind: 'help' }));
       else if (e.key === ' ') run(() => s.togglePause());

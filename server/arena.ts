@@ -66,7 +66,7 @@ export function startArena(u: AuthUser, taskId: string, input: { stage?: unknown
 
 async function runEntry(userId: number, taskId: string, arenaId: string, index: number, model: ModelDef, ctxTask: Task, agent: Agent, lang: 'th' | 'en', signal: AbortSignal) {
   const started = Date.now();
-  const ctx = buildStageContext({ notes: store.notesFor(agent), models: store.modelsOf(agent.ownerId), findAgent: store.getAgent }, ctxTask, { ...agent, modelId: model.id });
+  const ctx = buildStageContext({ notes: store.notesFor(agent), models: store.modelsOf(agent.ownerId), findAgent: store.getAgent }, ctxTask, { ...agent, modelId: model.id }, ctxTask.stage);
   ctx.model = model;
   let entry: Partial<ArenaEntry>;
   const ai = decideAi(userId, model);

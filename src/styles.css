@@ -672,3 +672,19 @@ input[type='range'] { accent-color: var(--blue); width: 180px; }
   .board-toolbar .hint { display: none; }
 }
 .stage-head > strong:first-child { white-space: nowrap; }
+
+/* ─── Parallel steps ───────────────────────────────────────────────────── */
+.pipe-group { display: inline-flex; flex-direction: column; gap: 2px; padding: 2px; border: 2px dashed var(--purple); }
+.pipe-single { display: inline-flex; }
+.stage-item.parallel { border-left: 4px solid var(--purple); }
+.parallel-chip { background: #efe6ff; font-size: 11px; }
+.step-row.joined { margin-left: 18px; border-left: 3px solid var(--purple); padding-left: 6px; }
+
+/* ─── Rooms ────────────────────────────────────────────────────────────── */
+.stage { flex-direction: column; gap: 6px; }
+.room-tabs { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+.room-tab { font: inherit; font-size: 13px; padding: 3px 10px; border: 2px solid var(--ink); background: var(--panel-2); color: var(--text-light); cursor: pointer; }
+.room-tab.on { background: var(--accent); color: var(--ink); }
+.room-tab.add { padding: 3px 8px; }
+.room-count { font-size: 11px; opacity: .75; }
+.room-input { width: 140px; padding: 2px 6px; }

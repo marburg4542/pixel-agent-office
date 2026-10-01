@@ -32,6 +32,7 @@ export type RoleId =
   | 'designer'
   | 'reviewer'
   | 'tester'
+  | 'manager'
   | 'custom';
 
 export interface Look {
@@ -58,6 +59,8 @@ export interface Agent {
   instructions: string;
   look: Look;
   desk: number;
+  /** Which room the desk is in (0 = first); missing = 0. */
+  room?: number;
   createdAt: number;
 }
 
@@ -146,6 +149,13 @@ export interface Task {
   autoRevisions?: number;
   /** Model Arena: one step re-run on several models side by side. */
   arena?: Arena;
+  /** Parallel groups (see shared/pipeline.ts); missing = every step on its own. */
+  groups?: number[];
+  /** Steps of the current group already finished / being worked on (groups of 2+ only). */
+  groupDone?: number[];
+  groupActive?: number[];
+  /** Progress 0–100 per step of the current group (groups of 2+ only). */
+  stepProgress?: Record<number, number>;
 }
 
 export interface ArenaEntry {
@@ -208,6 +218,10 @@ export interface UserSettings {
   aiMode: 'auto' | 'sim';
   /** Monthly spending cap in USD for real AI calls (0 = no cap). Over the cap, agents fall back to simulation. */
   budgetUsd: number;
+  /** Room names, one per room (1–4); '' = the default name. */
+  rooms: string[];
+  /** Look of the office scene. */
+  officeTheme: 'wood' | 'modern';
 }
 
 /** Real-AI spending for the current month. */

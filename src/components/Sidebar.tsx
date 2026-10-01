@@ -29,7 +29,7 @@ function TeamPanel() {
   const openModal = useStore((s) => s.openModal);
   useTicker(250);
 
-  const sorted = [...agents].sort((a, b) => a.desk - b.desk);
+  const sorted = [...agents].sort((a, b) => (a.room ?? 0) - (b.room ?? 0) || a.desk - b.desk);
   return (
     <section className="side-panel team">
       <h3>👥 {t('team')} <span className="hint" style={{ color: '#c9bfd9' }}>{agents.length}</span></h3>

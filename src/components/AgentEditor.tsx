@@ -13,7 +13,7 @@ import { PixelIcon } from './PixelIcon';
 
 const NAMES = ['Ada', 'Bit', 'Cleo', 'Dex', 'Echo', 'Finn', 'Gigi', 'Hex', 'Ivy', 'Juno', 'Kai', 'Luma', 'Milo', 'Nix', 'Orbit', 'Pip', 'Rex', 'Sol', 'Tux', 'Vega', 'Zed'];
 
-export function AgentEditor({ z, onClose, agentId, desk }: { z: number; onClose: () => void; agentId?: string; desk?: number }) {
+export function AgentEditor({ z, onClose, agentId, desk, room }: { z: number; onClose: () => void; agentId?: string; desk?: number; room?: number }) {
   const t = useT();
   const lang = useStore((s) => s.settings.lang);
   const agents = useStore((s) => s.agents);
@@ -21,9 +21,12 @@ export function AgentEditor({ z, onClose, agentId, desk }: { z: number; onClose:
   const existing = agents.find((a) => a.id === agentId);
   const { addAgent, updateAgent } = useStore.getState();
 
-  const freeDesks = Array.from({ length: MAX_DESKS }, (_, i) => i).filter(
-    (i) => i === existing?.desk || !agents.some((a) => a.desk === i),
-  );
+  const rooms = useStore((s) => s.settings.rooms ?? ['']);
+  const shownRoom = useStore((s) => s.room);
+  const [roomIdx, setRoomIdx] = useState(existing?.room ?? room ?? shownRoom);
+  const freeIn = (r: number) =>
+    Array.from({ length: MAX_DESKS }, (_, i) => i).filter((i) => (existing && (existing.room ?? 0) === r && i === existing.desk) || !agents.some((a) => a.desk === i && (a.room ?? 0) === r));
+  const freeDesks = freeIn(roomIdx);
   const takenNames = new Set(agents.map((a) => a.name));
 
   const [tab, setTab] = useState<'look' | 'job'>(existing ? 'job' : 'look');
@@ -50,7 +53,7 @@ export function AgentEditor({ z, onClose, agentId, desk }: { z: number; onClose:
       setTab('job');
       return;
     }
-    const data = { name: name.trim(), role, roleLabel: role === 'custom' ? roleLabel.trim() : undefined, modelId, instructions, look, desk: deskIdx };
+    const data = { name: name.trim(), role, roleLabel: role === 'custom' ? roleLabel.trim() : undefined, modelId, instructions, look, desk: deskIdx, room: roomIdx };
     setBusy(true);
     try {
       if (existing) await updateAgent(existing.id, data);
@@ -129,6 +132,25 @@ export function AgentEditor({ z, onClose, agentId, desk }: { z: number; onClose:
                   <label htmlFor="ag-name">{t('name')}</label>
                   <input id="ag-name" className="input" value={name} maxLength={16} onChange={(e) => setName(e.target.value)} />
                 </div>
+                {rooms.length > 1 && (
+                  <div className="field" style={{ maxWidth: 160 }}>
+                    <label htmlFor="ag-room">{t('room')}</label>
+                    <select
+                      id="ag-room"
+                      className="select"
+                      value={roomIdx}
+                      onChange={(e) => {
+                        const r = Number(e.target.value);
+                        setRoomIdx(r);
+                        setDeskIdx(freeIn(r)[0] ?? 0);
+                      }}
+                    >
+                      {rooms.map((name, i) => (
+                        <option key={i} value={i} disabled={!freeIn(i).length}>{name || t('roomN', { n: i + 1 })}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="field" style={{ maxWidth: 140 }}>
                   <label htmlFor="ag-desk">{t('desk')}</label>
                   <select id="ag-desk" className="select" value={deskIdx} onChange={(e) => setDeskIdx(Number(e.target.value))}>

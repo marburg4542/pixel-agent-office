@@ -6,11 +6,12 @@ import { sendTo } from '../events';
 import { getUsers, type UserRow } from '../users';
 import { createSeed, makeTask } from '../seed';
 import { DEFAULT_MODELS } from '../../shared/models';
-import { DEFAULT_SETTINGS, MAX_DESKS, SIM_SPEEDS } from '../../shared/constants';
+import { DEFAULT_SETTINGS, MAX_DESKS, MAX_ROOMS, SIM_SPEEDS } from '../../shared/constants';
 import { ROLES } from '../../shared/roles';
 import { uid } from '../../shared/util';
 import { translate } from '../../shared/i18n';
 import { normalizeQuery, type ResearchQuery } from '../../shared/research';
+import { currentSteps, groupRange, normalizeGroups, openStepFor } from '../../shared/pipeline';
 import type {
   Agent, ColumnId, FeedItem, Lang, Look, LogParams, ModelDef, Note, Priority, PublicUser, Scope, Size,
   StageOutput, Task, TeamAgent, UserSettings,
@@ -73,7 +74,7 @@ export function loadAll(): void {
   }
   for (const r of db.prepare('SELECT data FROM tasks').all() as { data: string }[]) {
     // Nobody is mid-step after a restart; the worker picks the work up again.
-    const t = { ...(JSON.parse(r.data) as Task), active: false };
+    const t = { ...(JSON.parse(r.data) as Task), active: false, groupActive: undefined };
     if (t.arena) {
       t.arena = { ...t.arena, entries: t.arena.entries.map((e) => (e.status === 'running' ? { ...e, status: 'error' as const, error: 'interrupted by a server restart' } : e)) };
     }
@@ -146,6 +147,9 @@ function commitNote(n: Note): Note {
   return view.note(n);
 }
 
+/** Reset per-step state when a task (re)starts a group. */
+const freshGroup = { groupDone: undefined, groupActive: undefined, stepProgress: undefined } as const;
+
 const MAX_LOG = 80;
 function withLog(t: Task, key: string, params?: LogParams): Task {
   const log = [...t.log, { at: Date.now(), key, params }];
@@ -192,6 +196,14 @@ export function updateSettings(userId: number, patch: Partial<UserSettings>): Us
   if (typeof patch.paused === 'boolean') s.paused = patch.paused;
   if (patch.aiMode === 'auto' || patch.aiMode === 'sim') s.aiMode = patch.aiMode;
   if (typeof patch.budgetUsd === 'number' && Number.isFinite(patch.budgetUsd)) s.budgetUsd = Math.max(0, Math.min(100000, patch.budgetUsd));
+  if (patch.officeTheme === 'wood' || patch.officeTheme === 'modern') s.officeTheme = patch.officeTheme;
+  if (Array.isArray(patch.rooms)) {
+    const rooms = patch.rooms.slice(0, MAX_ROOMS).map((r) => String(r ?? '').trim().slice(0, 24));
+    if (!rooms.length) rooms.push('');
+    // A room can only go away once nobody sits in it.
+    if (agentsOf(userId).some((a) => (a.room ?? 0) >= rooms.length)) throw new ApiError(400, 'ย้ายเอเจนต์ออกจากห้องก่อนลบห้อง', 'Move the agents out of that room before removing it');
+    s.rooms = rooms;
+  }
   saveSettings(userId);
   sendTo([userId], 'settings', publicSettings(userId));
   hooks.settingsChanged?.(userId);
@@ -204,6 +216,9 @@ const publicSettings = (userId: number): UserSettings => {
 };
 
 export const modelsOf = (userId: number): ModelDef[] => models.get(userId) ?? [];
+
+/** How many rooms this office has (1–4). */
+export const roomCount = (userId: number) => Math.max(1, Math.min(MAX_ROOMS, getSettings(userId).rooms?.length || 1));
 
 function setModels(userId: number, list: ModelDef[]) {
   models.set(userId, list);
@@ -315,7 +330,8 @@ function sanitizeAgent(userId: number, input: Partial<Agent>, base?: Agent): Omi
   const modelId = String(input.modelId ?? base?.modelId ?? '');
   if (!modelsOf(userId).some((m) => m.id === modelId)) throw new ApiError(400, 'ไม่พบโมเดลที่เลือก', 'Unknown model');
   const desk = clampInt(input.desk ?? base?.desk, 0, MAX_DESKS - 1);
-  const taken = agentsOf(userId).find((a) => a.desk === desk && a.id !== base?.id);
+  const room = clampInt(input.room ?? base?.room ?? 0, 0, roomCount(userId) - 1);
+  const taken = agentsOf(userId).find((a) => a.desk === desk && (a.room ?? 0) === room && a.id !== base?.id);
   if (taken) throw new ApiError(400, 'โต๊ะนี้มีคนนั่งแล้ว', 'That desk is taken');
   return {
     name,
@@ -325,17 +341,27 @@ function sanitizeAgent(userId: number, input: Partial<Agent>, base?: Agent): Omi
     instructions: String(input.instructions ?? base?.instructions ?? '').slice(0, 4000),
     look: sanitizeLook(input.look ?? base?.look),
     desk,
+    room,
   };
 }
 
 export function createAgent(u: AuthUser, input: Partial<Agent>): Agent {
-  if (agentsOf(u.id).length >= MAX_DESKS) throw new ApiError(400, 'โต๊ะเต็มแล้ว', 'All desks are taken');
+  if (agentsOf(u.id).length >= MAX_DESKS * roomCount(u.id)) throw new ApiError(400, 'โต๊ะเต็มแล้ว', 'All desks are taken');
   const agent: Agent = { ...sanitizeAgent(u.id, input), id: uid(), ownerId: u.id, createdAt: Date.now() };
   agents.set(agent.id, agent);
   saveAgent(agent);
   emitAgent(agent);
   pushFeed([u.id], 'feed_hired', { agent: agent.name });
   return agent;
+}
+
+/** First free desk, room by room (undefined when every desk is taken). */
+function freeSpot(userId: number): { desk: number; room: number } | undefined {
+  const mine = agentsOf(userId);
+  for (let room = 0; room < roomCount(userId); room++) {
+    for (let desk = 0; desk < MAX_DESKS; desk++) if (!mine.some((a) => a.desk === desk && (a.room ?? 0) === room)) return { desk, room };
+  }
+  return undefined;
 }
 
 function ownAgent(u: AuthUser, id: string): Agent {
@@ -431,6 +457,7 @@ interface TaskInput {
   column?: ColumnId;
   /** null removes it */
   research?: Partial<ResearchQuery> | null;
+  groups?: unknown;
 }
 
 const researchOf = (input: TaskInput['research'], title: string): ResearchQuery | undefined =>
@@ -453,6 +480,8 @@ export function createTask(u: AuthUser, input: TaskInput): Task {
   });
   const research = researchOf(input.research, title);
   if (research) task.research = research;
+  const groups = normalizeGroups(task.pipeline.length, input.groups);
+  if (groups) task.groups = groups;
   const created = commitTask(task);
   if (scope === 'shared') pushFeed(activeUserIds().filter((id) => id !== u.id), 'feed_sharedTask', { user: u.username, task: title });
   return created;
@@ -475,13 +504,16 @@ export function updateTask(u: AuthUser, id: string, input: TaskInput): Task {
   if (typeof input.requireReview === 'boolean') next.requireReview = input.requireReview;
   if (input.research === null) delete next.research;
   else if (input.research) next.research = researchOf(input.research, next.title);
-  if (input.pipeline !== undefined || scope !== t.scope) {
+  if (input.pipeline !== undefined || input.groups !== undefined || scope !== t.scope) {
     next.pipeline = checkPipeline(u, scope, input.pipeline ?? t.pipeline, t.pipeline);
+    next.groups = normalizeGroups(next.pipeline.length, input.groups !== undefined ? input.groups : t.groups);
     next.stage = Math.min(next.stage, next.pipeline.length);
-    if (next.pipeline[next.stage] !== t.pipeline[t.stage]) {
-      next.active = false;
-      next.stageProgress = 0;
-      next.blocked = undefined;
+    // Keep the stage at the start of its group.
+    if (next.stage < next.pipeline.length) next.stage = groupRange(next, next.stage)[0];
+    const before = currentSteps(t).map((i) => t.pipeline[i]).join();
+    const after = currentSteps(next).map((i) => next.pipeline[i]).join();
+    if (before !== after) {
+      Object.assign(next, freshGroup, { active: false, stageProgress: 0, blocked: undefined });
     }
     // Steps added to a finished pipeline that's waiting for review: send it back to work.
     if (t.column === 'review' && next.stage < next.pipeline.length) {
@@ -505,7 +537,7 @@ export function moveTask(u: AuthUser, id: string, column: ColumnId): Task {
   const t = visibleTask(u, id);
   if (!['backlog', 'todo', 'doing', 'review', 'done'].includes(column)) throw new ApiError(400, 'คอลัมน์ไม่ถูกต้อง', 'Invalid column');
   if (t.column === column) return t;
-  let next: Task = { ...t, column, active: false, blocked: undefined };
+  let next: Task = { ...t, ...freshGroup, column, active: false, blocked: undefined };
   if ((column === 'todo' || column === 'doing') && t.stage >= t.pipeline.length) {
     next = withLog({ ...next, stage: 0, stageProgress: 0 }, 'log_restarted');
   }
@@ -517,7 +549,7 @@ export function moveTask(u: AuthUser, id: string, column: ColumnId): Task {
 export function restartTask(u: AuthUser, id: string): Task {
   const t = visibleTask(u, id);
   return commitTask(
-    withLog({ ...t, stage: 0, stageProgress: 0, active: false, column: 'todo', doneAt: undefined, blocked: undefined, question: undefined, autoRevisions: 0 }, 'log_restarted'),
+    withLog({ ...t, ...freshGroup, stage: 0, stageProgress: 0, active: false, column: 'todo', doneAt: undefined, blocked: undefined, question: undefined, autoRevisions: 0 }, 'log_restarted'),
   );
 }
 
@@ -532,14 +564,16 @@ export function requestChanges(u: AuthUser, id: string, agentId: string, text: s
   const t = visibleTask(u, id);
   const body = String(text ?? '').trim().slice(0, 1000);
   if (!body) throw new ApiError(400, 'กรุณาใส่สิ่งที่อยากให้แก้', 'Please describe the change');
-  const stage = t.pipeline.indexOf(agentId);
-  if (stage < 0) throw new ApiError(400, 'เอเจนต์นี้ไม่อยู่ในลำดับงาน', "That agent isn't in this task's pipeline");
+  const step = t.pipeline.indexOf(agentId);
+  if (step < 0) throw new ApiError(400, 'เอเจนต์นี้ไม่อยู่ในลำดับงาน', "That agent isn't in this task's pipeline");
+  // Redo from the start of that step's group (parallel teammates redo their part too).
+  const stage = groupRange(t, step)[0];
   commitNote({
     id: uid(), scope: t.scope, createdBy: u.id, createdByName: '', text: body, to: agentId, taskId: t.id, color: 1, createdAt: Date.now(), readBy: [],
   });
   const agent = agents.get(agentId);
   const next = commitTask(
-    withLog({ ...t, stage, stageProgress: 0, active: false, column: 'todo', doneAt: undefined, blocked: undefined, question: undefined }, 'log_changes', { agent: agent?.name ?? '?', agentId, text: body }),
+    withLog({ ...t, ...freshGroup, stage, stageProgress: 0, active: false, column: 'todo', doneAt: undefined, blocked: undefined, question: undefined }, 'log_changes', { agent: agent?.name ?? '?', agentId, text: body }),
   );
   pushFeed(taskFeedAudience(t), 'feed_changes', { task: t.title });
   return next;
@@ -555,7 +589,7 @@ const isBlocked = (t: Task, now = Date.now()) => !!t.blocked && !(t.blocked.unti
 export function queueFor(agentId: string): Task[] {
   const now = Date.now();
   return [...tasks.values()]
-    .filter((t) => (t.column === 'todo' || t.column === 'doing') && t.pipeline[t.stage] === agentId && !t.active && !t.question && !isBlocked(t, now))
+    .filter((t) => (t.column === 'todo' || t.column === 'doing') && openStepFor(t, agentId) >= 0 && !t.question && !isBlocked(t, now))
     .sort(
       (a, b) =>
         (a.column === 'doing' ? 0 : 1) - (b.column === 'doing' ? 0 : 1) ||
@@ -568,7 +602,8 @@ export function queueFor(agentId: string): Task[] {
 export function blockTask(taskId: string, agent: Agent, kind: string, reason: string, until?: number, quiet = false): void {
   const t = tasks.get(taskId);
   if (!t) return;
-  commitTask(withLog({ ...t, active: false, blocked: { kind, reason, at: Date.now(), until } }, 'log_aiError', { agent: agent.name, error: reason }));
+  const groupActive = t.groupActive?.filter((i) => t.pipeline[i] !== agent.id);
+  commitTask(withLog({ ...t, active: !!groupActive?.length, groupActive, blocked: { kind, reason, at: Date.now(), until } }, 'log_aiError', { agent: agent.name, error: reason }));
   if (!quiet) pushFeed([agent.ownerId], 'feed_aiError', { agent: agent.name, task: t.title });
 }
 
@@ -584,11 +619,13 @@ export function retryTask(u: AuthUser, id: string): Task {
 }
 
 /** An agent needs an answer before it can do its step: park the task with the question. */
-export function askQuestion(taskId: string, agent: Agent, text: string): void {
+export function askQuestion(taskId: string, agent: Agent, text: string, step = -1): void {
   const t = tasks.get(taskId);
   if (!t) return;
-  const question = { agentId: agent.id, agentName: agent.name, stage: t.stage, text: text.slice(0, 600), at: Date.now() };
-  commitTask(withLog({ ...t, active: false, question }, 'log_asked', { agent: agent.name, text: question.text }));
+  const at = step >= 0 ? step : t.stage;
+  const question = { agentId: agent.id, agentName: agent.name, stage: at, text: text.slice(0, 600), at: Date.now() };
+  const groupActive = t.groupActive?.filter((i) => i !== at);
+  commitTask(withLog({ ...t, active: !!groupActive?.length, groupActive, question }, 'log_asked', { agent: agent.name, text: question.text }));
   pushFeed(taskFeedAudience(t), 'feed_asked', { agent: agent.name, task: t.title });
 }
 
@@ -613,7 +650,7 @@ export function autoRevise(taskId: string, reviewer: Agent, output: StageOutput,
   });
   commitTask(
     withLog(
-      { ...t, outputs: [...t.outputs, output], stage: targetStage, stageProgress: 0, active: false, column: 'todo', autoRevisions: (t.autoRevisions ?? 0) + 1 },
+      { ...t, ...freshGroup, outputs: [...t.outputs, output], stage: groupRange(t, targetStage)[0], stageProgress: 0, active: false, column: 'todo', autoRevisions: (t.autoRevisions ?? 0) + 1 },
       'log_autoRevise',
       { agent: reviewer.name, target: target?.name ?? '?', agentId: target?.id ?? '', text },
     ),
@@ -635,6 +672,29 @@ export function addStageOutput(taskId: string, output: StageOutput, logKey: stri
   return commitTask(withLog({ ...t, outputs: [...t.outputs, output] }, logKey, params));
 }
 
+/** Tasks a manager should plan: its owner's, waiting in To Do with nobody assigned. */
+export const unplannedFor = (manager: Agent): Task[] =>
+  [...tasks.values()]
+    .filter((t) => t.ownerId === manager.ownerId && t.column === 'todo' && !t.pipeline.length && !t.question && !t.watchlistId)
+    .sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || a.createdAt - b.createdAt);
+
+/** A manager decided who works on a task (each inner list = one step; 2+ ids = a parallel group). */
+export function planTask(taskId: string, manager: Agent, steps: string[][], reason: string): boolean {
+  const t = tasks.get(taskId);
+  if (!t || t.pipeline.length || t.column !== 'todo') return false;
+  const own = new Set(agentsOf(manager.ownerId).map((a) => a.id));
+  const clean = steps.map((g) => [...new Set(g)].filter((id) => own.has(id))).filter((g) => g.length);
+  if (!clean.length) return false;
+  const pipeline = clean.flat();
+  const groups = normalizeGroups(pipeline.length, clean.flatMap((g, i) => g.map(() => i)));
+  const names = clean.map((g) => g.map((id) => agents.get(id)?.name ?? '?').join(' + ')).join(' → ');
+  let next: Task = withLog({ ...t, pipeline, groups, stage: 0, stageProgress: 0, ...freshGroup }, 'log_planned', { agent: manager.name, plan: names });
+  if (reason) next = withLog(next, 'log_planReason', { text: reason });
+  commitTask(next);
+  pushFeed(taskFeedAudience(t), 'feed_planned', { agent: manager.name, task: t.title });
+  return true;
+}
+
 export function claimTask(taskId: string, agent: Agent): void {
   const t = tasks.get(taskId);
   if (!t) return;
@@ -642,23 +702,40 @@ export function claimTask(taskId: string, agent: Agent): void {
   pushFeed(taskFeedAudience(t), 'feed_picked', { agent: agent.name, task: t.title });
 }
 
-export function setTaskActive(taskId: string, active: boolean): void {
+/** Start/stop work on one step (in a parallel group several steps can be active at once). */
+export function setStepActive(taskId: string, step: number, active: boolean): void {
   const t = tasks.get(taskId);
-  if (t && t.active !== active) commitTask({ ...t, active });
+  if (!t) return;
+  if (currentSteps(t).length <= 1) {
+    if (t.active !== active) commitTask({ ...t, active });
+    return;
+  }
+  const set = new Set(t.groupActive ?? []);
+  if (active) set.add(step);
+  else set.delete(step);
+  const groupActive = [...set].sort((a, b) => a - b);
+  commitTask({ ...t, groupActive, active: groupActive.length > 0 });
 }
 
 const progressEmitAt = new Map<string, number>();
 const progressSaveAt = new Map<string, number>();
 
 /** Frequent progress updates: emitted at most ~1.5×/s and persisted every few seconds. */
-export function setTaskProgress(taskId: string, p: number): void {
+export function setTaskProgress(taskId: string, p: number, step?: number): void {
   const t = tasks.get(taskId);
-  if (!t || t.stageProgress === p) return;
+  if (!t) return;
+  const steps = currentSteps(t);
+  if (steps.length > 1 && step !== undefined) {
+    // Parallel group: the task shows the average of its steps (finished ones count as 100).
+    t.stepProgress = { ...t.stepProgress, [step]: p };
+    p = Math.floor(steps.reduce((sum, i) => sum + (t.groupDone?.includes(i) ? 100 : (t.stepProgress?.[i] ?? 0)), 0) / steps.length);
+  }
+  if (t.stageProgress === p && steps.length <= 1) return;
   t.stageProgress = p;
   const now = Date.now();
   if (now - (progressEmitAt.get(taskId) ?? 0) > 650) {
     progressEmitAt.set(taskId, now);
-    sendTo(taskAudience(t), 'task-progress', { id: t.id, stageProgress: p, active: t.active });
+    sendTo(taskAudience(t), 'task-progress', { id: t.id, stageProgress: p, active: t.active, stepProgress: t.stepProgress });
   }
   if (now - (progressSaveAt.get(taskId) ?? 0) > 3000) {
     progressSaveAt.set(taskId, now);
@@ -671,14 +748,32 @@ export function pushLog(taskId: string, key: string, params?: LogParams): void {
   if (t) commitTask(withLog(t, key, params));
 }
 
-export function completeStage(taskId: string, output: StageOutput): { next: string | null; column: ColumnId } {
+/**
+ * A step is finished. In a parallel group the task waits until every step of the group is done;
+ * then everything goes on to the next group. `next` lists the agents of the next group.
+ */
+export function completeStage(taskId: string, output: StageOutput): { next: string[]; column: ColumnId; waiting: boolean } {
   const t = tasks.get(taskId);
-  if (!t) return { next: null, column: 'done' };
-  const nextStage = t.stage + 1;
+  if (!t) return { next: [], column: 'done', waiting: false };
+  const steps = currentSteps(t);
+  if (steps.length > 1) {
+    const groupDone = [...new Set([...(t.groupDone ?? []), output.stage])].sort((a, b) => a - b);
+    if (groupDone.length < steps.length) {
+      const groupActive = (t.groupActive ?? []).filter((i) => i !== output.stage);
+      commitTask(
+        withLog({ ...t, outputs: [...t.outputs, output], groupDone, groupActive, active: groupActive.length > 0, stepProgress: { ...t.stepProgress, [output.stage]: 100 } }, 'log_stageDone', {
+          agent: output.agentName, n: output.stage + 1, model: output.modelName,
+        }),
+      );
+      return { next: [], column: t.column, waiting: true };
+    }
+  }
+  const nextStage = steps.length ? steps[steps.length - 1] + 1 : t.stage + 1;
   const hasNext = nextStage < t.pipeline.length;
   const column: ColumnId = hasNext ? 'doing' : t.requireReview ? 'review' : 'done';
   let n: Task = {
     ...t,
+    ...freshGroup,
     outputs: [...t.outputs, output],
     stage: nextStage,
     stageProgress: 0,
@@ -687,10 +782,11 @@ export function completeStage(taskId: string, output: StageOutput): { next: stri
     doneAt: column === 'done' ? Date.now() : t.doneAt,
   };
   n = withLog(n, 'log_stageDone', { agent: output.agentName, n: output.stage + 1, model: output.modelName });
-  if (hasNext) n = withLog(n, 'log_handoff', { agent: output.agentName, next: agents.get(t.pipeline[nextStage])?.name ?? '?' });
+  const nextIds = hasNext ? currentSteps(n).map((i) => n.pipeline[i]) : [];
+  if (hasNext) n = withLog(n, 'log_handoff', { agent: output.agentName, next: nextIds.map((id) => agents.get(id)?.name ?? '?').join(' + ') });
   else n = withLog(n, column === 'review' ? 'log_toReview' : 'log_done');
   commitTask(n);
-  return { next: hasNext ? t.pipeline[nextStage] : null, column };
+  return { next: nextIds, column, waiting: false };
 }
 
 export { taskFeedAudience };
@@ -845,15 +941,15 @@ export function importOffice(u: AuthUser, data: unknown): { agents: number; task
 
   const idMap = new Map<string, string>();
   const fallbackModel = modelsOf(u.id)[0]?.id;
-  for (const a of d.agents.slice(0, MAX_DESKS * 2)) {
-    const free = [...Array(MAX_DESKS).keys()].find((i) => !agentsOf(u.id).some((x) => x.desk === i));
-    if (free === undefined) {
+  for (const a of d.agents.slice(0, MAX_DESKS * MAX_ROOMS * 2)) {
+    const spot = freeSpot(u.id);
+    if (!spot) {
       counts.skippedAgents++;
       continue;
     }
     try {
       const modelId = modelsOf(u.id).some((m) => m.id === a.modelId) ? a.modelId : fallbackModel;
-      const created = createAgent(u, { ...a, desk: agentsOf(u.id).some((x) => x.desk === a.desk) ? free : a.desk, modelId });
+      const created = createAgent(u, { ...a, ...spot, modelId });
       idMap.set(a.id, created.id);
       counts.agents++;
     } catch {

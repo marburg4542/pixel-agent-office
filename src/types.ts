@@ -8,7 +8,7 @@ export type Modal =
   | { kind: 'task'; taskId: string }
   | { kind: 'taskEdit'; taskId?: string; preset?: Partial<Task> }
   | { kind: 'noteEdit'; noteId?: string; preset?: Partial<Note> }
-  | { kind: 'agentEdit'; agentId?: string; desk?: number }
+  | { kind: 'agentEdit'; agentId?: string; desk?: number; room?: number }
   | { kind: 'agent'; agentId: string }
   | { kind: 'models' }
   | { kind: 'settings'; tab?: SettingsTab }

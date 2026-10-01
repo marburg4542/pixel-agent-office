@@ -211,6 +211,16 @@ function SoundTab() {
           <button className={`btn sm ${settings.lang === 'en' ? 'on' : ''}`} onClick={() => setLang('en')}>English</button>
         </span>
       </div>
+      <div className="opt-row">
+        <label>{t('set_theme')}</label>
+        <span className="seg">
+          {(['wood', 'modern'] as const).map((th) => (
+            <button key={th} className={`btn sm ${(settings.officeTheme ?? 'wood') === th ? 'on' : ''}`} aria-pressed={(settings.officeTheme ?? 'wood') === th} onClick={() => void updateSettings({ officeTheme: th }).catch(() => {})}>
+              {th === 'wood' ? '🪵' : '🏢'} {t(`theme_${th}`)}
+            </button>
+          ))}
+        </span>
+      </div>
       <NotifyRow />
       <p className="hint">{t('set_soundHint')}</p>
     </div>

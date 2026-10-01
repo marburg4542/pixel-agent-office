@@ -19,7 +19,7 @@ function standingEmote(agentId: string, s: State): EmoteKind | null {
 }
 import {
   drawBoard, drawBubble, drawCabinet, drawChair, drawClockHands, drawDesk, drawEnvelope, drawPaper,
-  drawEmote, drawNight, drawPlant, drawProgress, drawTv, drawWallNotes, drawWaterCooler, drawWindows, lampLight, nightLevel, rect, text,
+  drawEmote, drawNight, setOfficeTheme, drawPlant, drawProgress, drawTv, drawWallNotes, drawWaterCooler, drawWindows, lampLight, nightLevel, rect, text,
   type EmoteKind,
 } from './office';
 
@@ -39,7 +39,12 @@ function noteUnread(n: Note, s: State): boolean {
   return targets.some((a) => !n.readBy.includes(a.id));
 }
 
+/** Agents sitting in the room on screen. */
+export const roomAgents = (s: Pick<State, 'agents' | 'room'>) => s.agents.filter((a) => (a.room ?? 0) === s.room);
+
 export function renderScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElement, s: State, hover: HoverTarget | null): void {
+  const agents = roomAgents(s);
+  setOfficeTheme(s.settings.officeTheme);
   const t = engine.realTime;
   const now = engine.debugHour !== undefined ? new Date(2026, 0, 1, engine.debugHour, 30) : new Date();
   const night = nightLevel(now);
@@ -62,7 +67,7 @@ export function renderScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElement
 
   // Depth-sorted scene objects
   const items: { y: number; draw: () => void }[] = [];
-  const byDesk = new Map(s.agents.map((a) => [a.desk, a]));
+  const byDesk = new Map(agents.map((a) => [a.desk, a]));
   for (const d of DESKS) {
     const a = byDesk.get(d.index);
     const seat = seatOf(d);
@@ -85,7 +90,7 @@ export function renderScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElement
         }),
     });
   }
-  for (const a of s.agents) {
+  for (const a of agents) {
     const va = engine.agents.get(a.id);
     if (va) items.push({ y: va.y, draw: () => drawAgent(ctx, a.look, va, t, s.settings.paused) });
   }
@@ -99,7 +104,7 @@ export function renderScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElement
 
   if (night > 0) {
     const lights: { x: number; y: number; r: number }[] = [];
-    for (const a of s.agents) {
+    for (const a of agents) {
       const va = engine.agents.get(a.id);
       if (!va || va.status === 'walking' || va.status === 'reading') continue;
       lights.push({ ...lampLight(DESKS[a.desk] ?? DESKS[0]), r: va.status === 'working' ? 34 : 26 });
@@ -109,7 +114,7 @@ export function renderScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElement
   }
 
   // Overlays (always on top)
-  for (const a of s.agents) {
+  for (const a of agents) {
     const va = engine.agents.get(a.id);
     if (!va) continue;
     const head = Math.round(va.y - 26);
@@ -181,7 +186,7 @@ export function hitTest(p: Pt, s: State): HoverTarget | null {
   if (inRect(p, { x: BOARD.x, y: BOARD.y - 6, w: BOARD.w, h: BOARD.h + 6 }) || inRect(p, NOTES_AREA)) return { kind: 'board' };
   for (const d of DESKS) {
     if (p.x >= d.x - 26 && p.x <= d.x + 26 && p.y >= d.y - 42 && p.y <= d.y + 2) {
-      const a = s.agents.find((x) => x.desk === d.index);
+      const a = roomAgents(s).find((x) => x.desk === d.index);
       return a ? { kind: 'agent', id: a.id } : { kind: 'desk', index: d.index };
     }
   }

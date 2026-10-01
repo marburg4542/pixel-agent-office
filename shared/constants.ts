@@ -1,6 +1,8 @@
 import type { ColumnId, UserSettings } from './types';
 
 export const MAX_DESKS = 8;
+/** Rooms per office (8 desks each). */
+export const MAX_ROOMS = 4;
 
 export const COLUMNS: ColumnId[] = ['backlog', 'todo', 'doing', 'review', 'done'];
 
@@ -14,6 +16,8 @@ export const DEFAULT_SETTINGS: UserSettings = {
   paused: false,
   aiMode: 'auto',
   budgetUsd: 0,
+  rooms: [''],
+  officeTheme: 'wood',
 };
 
 export const SIM_SPEEDS = [1, 2, 4, 8];

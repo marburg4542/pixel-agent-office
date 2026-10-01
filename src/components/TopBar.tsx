@@ -49,6 +49,7 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
   const paused = useStore((s) => s.settings.paused);
   const speed = useStore((s) => s.settings.simSpeed);
   const agents = useStore((s) => s.agents.length);
+  const seats = useStore((s) => MAX_DESKS * (s.settings.rooms?.length || 1));
   const doing = useStore((s) => s.tasks.filter((x) => x.column === 'doing').length);
   const waiting = useStore((s) => s.tasks.filter((x) => x.column === 'todo').length);
   const review = useStore((s) => s.tasks.filter((x) => x.column === 'review').length);
@@ -100,7 +101,7 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
       </div>
 
       <div className="tb-stats">
-        <span title={t('team')}>👥 <b>{agents}</b>/{MAX_DESKS}</span>
+        <span title={t('team')}>👥 <b>{agents}</b>/{seats}</span>
         <span title={t('col_todo')}>⏳ <b>{waiting}</b> {t('col_todo')}</span>
         <span title={t('col_doing')}>⚙ <b>{doing}</b> {t('statsDoing')}</span>
         {review > 0 && (
@@ -127,7 +128,7 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
         <button className="btn sm" onClick={() => openModal({ kind: 'stats' })} aria-label={t('stats')}>
           <PixelIcon name="stats" /> <span className="tb-label">{t('stats')}</span>
         </button>
-        <button className="btn sm" disabled={agents >= MAX_DESKS} title={agents >= MAX_DESKS ? t('officeFull') : ''} onClick={() => openModal({ kind: 'agentEdit' })}>
+        <button className="btn sm" disabled={agents >= seats} title={agents >= seats ? t('officeFull') : ''} onClick={() => openModal({ kind: 'agentEdit' })}>
           <PixelIcon name="hire" /> <span className="tb-label">{t('hire')}</span>
         </button>
         <button className="btn sm desktop-only" onClick={() => openModal({ kind: 'models' })} aria-label={t('models')}>

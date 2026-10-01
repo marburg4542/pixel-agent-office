@@ -21,7 +21,14 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
   const [description, setDescription] = useState(init.description ?? '');
   const [priority, setPriority] = useState<Priority>(init.priority ?? 'med');
   const [size, setSize] = useState<Size>(init.size ?? 'M');
-  const [pipeline, setPipeline] = useState<string[]>(init.pipeline ?? []);
+  const [pipeline, setPipelineRaw] = useState<string[]>(init.pipeline ?? []);
+  /** joins[i]: step i works at the same time as step i-1 (same parallel group). */
+  const [joins, setJoins] = useState<boolean[]>(() => (init.pipeline ?? []).map((_, i) => i > 0 && init.groups?.[i] !== undefined && init.groups[i] === init.groups[i - 1]));
+  const setPipeline = (next: string[], nextJoins?: boolean[]) => {
+    setPipelineRaw(next);
+    setJoins((nextJoins ?? next.map((_, i) => joins[i] ?? false)).map((j, i) => i > 0 && j));
+  };
+  const groups = pipeline.reduce<number[]>((acc, _, i) => [...acc, i === 0 ? 0 : acc[i - 1] + (joins[i] ? 0 : 1)], []);
   const [requireReview, setRequireReview] = useState(init.requireReview ?? true);
   const [column, setColumn] = useState<ColumnId>(init.column ?? 'todo');
   const [scope, setScope] = useState<Scope>(init.scope ?? 'personal');
@@ -42,17 +49,19 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
       if (a) picked.push(a.id);
       else missing.push(r);
     }
-    setPipeline(picked);
+    setPipeline(picked, picked.map(() => false));
     if (roles.includes('analyst') && !research) setResearch({ ...DEFAULT_RESEARCH, query: title.trim() });
     if (missing.length) toast.warn(t('tplMissing', { roles: missing.map((r) => t(`role_${r}`)).join(', ') }));
   };
 
   const move = (i: number, d: number) => {
     const next = [...pipeline];
+    const nj = [...joins];
     const j = i + d;
     if (j < 0 || j >= next.length) return;
     [next[i], next[j]] = [next[j], next[i]];
-    setPipeline(next);
+    [nj[i], nj[j]] = [nj[j], nj[i]];
+    setPipeline(next, nj);
   };
 
   const save = async () => {
@@ -65,7 +74,7 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
       return;
     }
     const data = {
-      title: title.trim(), description: description.trim(), priority, size, pipeline, requireReview, scope,
+      title: title.trim(), description: description.trim(), priority, size, pipeline, groups, requireReview, scope,
       // null tells the server to drop research from an existing task
       research: research ? { ...research, query: research.query.trim() || title.trim() } : existing?.research ? null : undefined,
     };
@@ -169,14 +178,14 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
 
       <div className="field">
         <span className="field-label">{t('pipeline')}</span>
-        <span className="hint">{scope === 'shared' ? t('pipelineHintShared') : t('pipelineHint')}</span>
+        <span className="hint">{scope === 'shared' ? t('pipelineHintShared') : t('pipelineHint')} {t('parallelEditorHint')}</span>
         <div style={{ marginTop: 6 }}>
           {pipeline.map((id, i) => {
             const a = findAnyAgent(team, id);
             const mine = a?.mine ?? false;
             return (
-              <div className="step-row" key={`${id}-${i}`}>
-                <span className="step-num">{i + 1}</span>
+              <div className={`step-row ${joins[i] ? 'joined' : ''}`} key={`${id}-${i}`}>
+                <span className="step-num">{groups[i] + 1}</span>
                 {a ? <Avatar look={a.look} size={28} /> : <span />}
                 {mine ? (
                   <select className="select" value={id} onChange={(e) => setPipeline(pipeline.map((x, j) => (j === i ? e.target.value : x)))}>
@@ -190,9 +199,20 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
                   </div>
                 )}
                 <span className="row" style={{ gap: 2, flexWrap: 'nowrap' }}>
+                  {i > 0 && (
+                    <button
+                      className={`btn sm icon ${joins[i] ? 'on' : ''}`}
+                      aria-pressed={joins[i]}
+                      title={t('parallelToggle')}
+                      aria-label={t('parallelToggle')}
+                      onClick={() => setJoins(joins.map((x, k) => (k === i ? !x : x)))}
+                    >
+                      ⇉
+                    </button>
+                  )}
                   <button className="btn sm icon" onClick={() => move(i, -1)} disabled={i === 0} aria-label="up">▲</button>
                   <button className="btn sm icon" onClick={() => move(i, 1)} disabled={i === pipeline.length - 1} aria-label="down">▼</button>
-                  <button className="btn sm icon danger" onClick={() => setPipeline(pipeline.filter((_, j) => j !== i))} aria-label="remove">✕</button>
+                  <button className="btn sm icon danger" onClick={() => setPipeline(pipeline.filter((_, j) => j !== i), joins.filter((_, j) => j !== i))} aria-label="remove">✕</button>
                 </span>
               </div>
             );

@@ -3,6 +3,7 @@ import { roleById } from '../../shared/roles';
 import { translate } from '../../shared/i18n';
 import { clamp, pick, randInt } from '../../shared/util';
 import { collabInstructions, qaForPrompt, simVerdict } from './collab';
+import { groupRange } from '../../shared/pipeline';
 
 /**
  * Everything an agent "knows" when it works one step of a task.
@@ -30,9 +31,12 @@ export function buildStageContext(
   s: { notes: Note[]; models: ModelDef[]; findAgent: (id: string) => Agent | undefined },
   task: Task,
   agent: Agent,
+  step = task.stage,
 ): StageContext {
+  // Everything finished before this step's group is handed to it (parallel teammates work side by side).
+  const [groupStart, groupEnd] = groupRange(task, step);
   const previous: StageOutput[] = [];
-  for (let i = 0; i < task.stage; i++) {
+  for (let i = 0; i < groupStart; i++) {
     const out = [...task.outputs].reverse().find((o) => o.stage === i);
     if (out) previous.push(out);
   }
@@ -41,10 +45,10 @@ export function buildStageContext(
     task,
     agent,
     model: s.models.find((m) => m.id === agent.modelId),
-    stage: task.stage,
+    stage: step,
     previous,
     notes,
-    nextAgent: s.findAgent(task.pipeline[task.stage + 1]),
+    nextAgent: s.findAgent(task.pipeline[groupEnd]),
   };
 }
 
@@ -61,6 +65,7 @@ const ROLE_GUIDE: Record<Agent['role'], string> = {
   designer: "You design concretely: layout sections, colors as hex codes, typography and components. You can't produce images, so describe precisely.",
   reviewer: "You review the work handed to you against the brief: what's good, issues ranked by severity, and concrete fixes.",
   tester: 'You design tests: a table of cases with inputs and expected results, plus the risky gaps you see.',
+  manager: 'You run the team: you plan who works on what and keep work moving. When you do a step yourself, write a clear plan with owners and next actions.',
   custom: 'Follow your standing instructions.',
 };
 

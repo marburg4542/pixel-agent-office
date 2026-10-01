@@ -10,6 +10,7 @@ import { translate } from '../../shared/i18n';
 import type { Agent, Note, Task } from '../types';
 import { onServerEvent } from '../lib/events';
 import { play } from '../lib/sound';
+import { openStepFor } from '../../shared/pipeline';
 
 export type AgentStatus = 'idle' | 'walking' | 'reading' | 'working';
 
@@ -161,7 +162,7 @@ class Engine {
   queueFor(agentId: string): Task[] {
     return useStore
       .getState()
-      .tasks.filter((t) => (t.column === 'todo' || t.column === 'doing') && t.pipeline[t.stage] === agentId && !t.active)
+      .tasks.filter((t) => (t.column === 'todo' || t.column === 'doing') && openStepFor(t, agentId) >= 0 && !t.question)
       .sort(
         (a, b) =>
           (a.column === 'doing' ? 0 : 1) - (b.column === 'doing' ? 0 : 1) ||
@@ -194,7 +195,7 @@ class Engine {
     dt = Math.min(dt, 0.1);
     this.realTime += dt;
     const s = useStore.getState();
-    this.sync(s.agents);
+    this.sync(s.agents.filter((a) => (a.room ?? 0) === s.room));
 
     let typing = false;
     for (const va of this.agents.values()) {
