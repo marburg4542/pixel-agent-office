@@ -7,6 +7,7 @@ import { clockTime, timeLeft, tokenCount, usd } from '../util';
 import { copyText, downloadText, slug } from '../lib/files';
 import type { ColumnId, Lang, Task } from '../types';
 import { Markdown } from './Markdown';
+import { ResearchView } from './ResearchView';
 
 /** All step results as one Markdown document. */
 function resultsMarkdown(task: Task, lang: Lang): string {
@@ -198,7 +199,7 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
                   )}
                 </div>
                 <span style={{ marginLeft: 'auto' }} className="row">
-                  {out && !(isCurrent && liveHere) && out.simulated !== false && <Stars value={out.score} />}
+                  {out && !(isCurrent && liveHere) && out.score > 0 && <Stars value={out.score} />}
                   <strong>{state}</strong>
                 </span>
               </div>
@@ -214,6 +215,7 @@ export function TaskDetail({ z, onClose, taskId }: { z: number; onClose: () => v
                 </div>
               ) : out ? (
                 <div className="stage-out">
+                  {out.research && <ResearchView result={out.research} />}
                   <Markdown text={out.text} />
                   <div className="row stage-out-foot">
                     <span className="hint">

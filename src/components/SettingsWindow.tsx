@@ -499,7 +499,7 @@ function KeyRow({ def, status, onChange }: { def: KeyProviderDef; status?: ApiKe
         {status?.configured ? <span className="chip key-ok">✓ {status.hint}</span> : <span className="chip">{t('keys_notSet')}</span>}
         <span style={{ marginLeft: 'auto' }} className="row">
           <a href={def.url} target="_blank" rel="noreferrer" className="link hint">{t('keys_getOne')} ↗</a>
-          {status?.configured && def.group === 'ai' && (
+          {status?.configured && (
             <button className="btn sm" disabled={busy} onClick={() => void test()}>{busy ? t('keys_testing') : `🔌 ${t('keys_test')}`}</button>
           )}
           <button className="btn sm" onClick={() => setOpen(!open)}>{status?.configured ? t('keys_replace') : t('keys_add')}</button>

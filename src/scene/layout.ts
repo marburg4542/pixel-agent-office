@@ -9,6 +9,8 @@ export const NOTES_AREA = { x: 268, y: 10, w: 32, h: 40 };
 export const LEFT_WINDOW = { x: 16, y: 10, w: 72, h: 32 };
 export const RIGHT_WINDOW = { x: 310, y: 10, w: 76, h: 32 };
 export const CLOCK = { x: 112, y: 24 };
+/** Newsroom TV, under the clock. */
+export const TV = { x: 96, y: 36, w: 34, h: 21 };
 
 /** Walkways (feet y). */
 export const AISLE_TOP = 84;

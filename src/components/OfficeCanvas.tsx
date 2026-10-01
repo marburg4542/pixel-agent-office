@@ -77,6 +77,7 @@ export function OfficeCanvas() {
     const target = hitTest(locate(e), useStore.getState());
     if (!target) return;
     if (target.kind === 'board') openModal({ kind: 'board' });
+    else if (target.kind === 'tv') openModal({ kind: 'newsroom' });
     else if (target.kind === 'note') openModal({ kind: 'noteEdit', noteId: target.id });
     else if (target.kind === 'agent') openModal({ kind: 'agent', agentId: target.id });
     else openModal({ kind: 'agentEdit', desk: target.index });
@@ -109,6 +110,7 @@ function Tooltip({ target, x, y }: { target: HoverTarget; x: number; y: number }
 
   let body: React.ReactNode;
   if (target.kind === 'board') body = <div>📋 {t('openBoard')}</div>;
+  else if (target.kind === 'tv') body = <div>📺 {t('openNewsroom')}</div>;
   else if (target.kind === 'note') {
     const n = notes.find((x) => x.id === target.id);
     if (!n) return null;

@@ -4,6 +4,8 @@ import { msg } from '../lang';
 import { getUserById, toPublicUser } from '../users';
 import * as store from '../workspace/store';
 import * as worker from '../worker/engine';
+import * as newsroom from '../workspace/newsroom';
+import { CONNECTORS } from '../research/connectors';
 import { deleteKey, getKey, listKeys, setKey } from '../keys';
 import { testAiKey } from '../ai';
 import { usageSummary } from '../usage';
@@ -40,6 +42,7 @@ router.get(
       keys: listKeys(user.id),
       usage: usageSummary(user.id),
       live: worker.liveTextFor(new Set(ws.tasks.map((t) => t.id))),
+      ...newsroom.watchlistsFor(user.id),
       serverTime: Date.now(),
     };
     return result;
@@ -86,6 +89,14 @@ router.post('/models/reset', h((req) => store.resetModels(req.user!.id)));
 // Settings
 router.put('/settings', h((req) => store.updateSettings(req.user!.id, req.body ?? {})));
 
+// Newsroom
+router.post('/watchlists', h((req) => newsroom.createWatchlist(req.user!, req.body ?? {})));
+router.put('/watchlists/:id', h((req) => newsroom.updateWatchlist(req.user!, String(req.params.id), req.body ?? {})));
+router.delete('/watchlists/:id', h((req) => (newsroom.deleteWatchlist(req.user!, String(req.params.id)), true)));
+router.post('/watchlists/:id/run', h((req) => newsroom.runNow(req.user!, String(req.params.id))));
+router.get('/watchlists/:id/reports', h((req) => newsroom.reportsOf(req.user!, String(req.params.id))));
+router.get('/reports/:id', h((req) => newsroom.getReport(req.user!, String(req.params.id))));
+
 // Spending on real AI calls this month
 router.get('/usage', h((req) => usageSummary(req.user!.id)));
 
@@ -114,7 +125,8 @@ router.post('/keys/:provider/test', async (req, res, next) => {
   try {
     const provider = String(req.params.provider);
     const def = keyProvider(provider);
-    if (!def || def.group !== 'ai') {
+    const dataTest = def?.group === 'data' ? CONNECTORS[def.id as keyof typeof CONNECTORS]?.test : undefined;
+    if (!def || (def.group === 'data' && !dataTest)) {
       res.status(400).json({ success: false, message: msg(req, 'ยังทดสอบคีย์ประเภทนี้ไม่ได้', "This kind of key can't be tested yet") });
       return;
     }
@@ -123,7 +135,13 @@ router.post('/keys/:provider/test', async (req, res, next) => {
       res.status(404).json({ success: false, message: msg(req, 'ยังไม่ได้ใส่คีย์นี้', 'No key saved for this provider') });
       return;
     }
-    const error = await testAiKey(def.id as ProviderId, key);
+    let error: string | null;
+    if (dataTest) {
+      error = await dataTest(key).then(
+        () => null,
+        (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 200),
+      );
+    } else error = await testAiKey(def.id as ProviderId, key);
     res.json({ success: true, data: { ok: !error, error } });
   } catch (e) {
     next(e);

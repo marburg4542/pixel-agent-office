@@ -29,6 +29,29 @@ before(async () => {
   db = (await import('../db')).default;
   users.seedAdminIfNeeded();
   store.loadAll();
+  (await import('../workspace/newsroom')).loadNewsroom();
+  // Research sources never touch the network in tests.
+  const { CONNECTORS } = await import('../research/connectors');
+  const day = 24 * 3600 * 1000;
+  for (const id of Object.keys(CONNECTORS) as (keyof typeof CONNECTORS)[]) CONNECTORS[id] = { run: async () => ({}) };
+  CONNECTORS.gdelt = {
+    run: async (q) => ({
+      news: [
+        { source: 'gdelt', title: `${q.query} posts record profit, investors love it`, url: 'https://example.com/a', at: Date.now() - day, lang: 'en' },
+        { source: 'gdelt', title: `${q.query} hit by lawsuit and outage`, url: 'https://example.com/b', at: Date.now() - 2 * day, lang: 'en' },
+      ],
+      tone: [{ t: Date.now() - day, v: 1.5 }],
+    }),
+  };
+  CONNECTORS.hn = {
+    run: async () => ({
+      posts: [
+        { source: 'hn', text: 'Great product, works fast and reliable', url: 'https://news.ycombinator.com/item?id=1', at: Date.now() - day, engagement: 40 },
+        { source: 'hn', text: 'Terrible support, very disappointed', url: 'https://news.ycombinator.com/item?id=2', at: Date.now() - day, engagement: 3 },
+        { source: 'hn', text: 'It launched yesterday', url: 'https://news.ycombinator.com/item?id=3', at: Date.now() - day },
+      ],
+    }),
+  };
   server = createApp().listen(0);
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
 });
@@ -306,6 +329,132 @@ test('real AI steps stream into the task, record usage, and block on errors', as
   } finally {
     Object.assign(ai.ADAPTERS, original);
   }
+});
+
+const waitForTask = async (token: string, id: string, done: (t: any) => boolean) => {
+  for (let i = 0; i < 400; i++) {
+    const t = (await call('/workspace', { token })).data.tasks.find((x: { id: string }) => x.id === id);
+    if (done(t)) return t;
+    worker.tick(1);
+    await new Promise((r) => setTimeout(r, 2));
+  }
+  assert.fail('task never got there');
+};
+
+test('research tasks gather data and estimate sentiment without AI', async () => {
+  const ws = (await call('/workspace', { token: adminToken })).data;
+  assert.equal(ws.settings.aiMode, 'sim');
+  const created = await call('/tasks', {
+    method: 'POST',
+    token: adminToken,
+    body: { title: 'How do people feel about Acme?', pipeline: [ws.agents[0].id], size: 'S', priority: 'high', research: { query: 'Acme', sources: ['gdelt', 'hn', 'reddit'], days: 7 } },
+  });
+  assert.equal(created.data.research.query, 'Acme');
+  const t = await waitForTask(adminToken, created.data.id, (x) => x.column === 'review');
+  const out = t.outputs[0];
+  assert.equal(out.simulated, true);
+  assert.equal(out.research.pack.news.length, 2);
+  assert.equal(out.research.pack.posts.length, 3);
+  assert.deepEqual(out.research.pack.sources.find((s: { source: string }) => s.source === 'reddit'), { source: 'reddit', ok: false, count: 0, note: 'no key' });
+  const { overall } = out.research.analysis;
+  assert.equal(out.research.analysis.estimated, true);
+  assert.equal(overall.positive + overall.neutral + overall.negative, 100);
+  assert.ok(overall.positive > 0 && overall.negative > 0, JSON.stringify(overall));
+  assert.match(out.text, /Acme/);
+  assert.ok(t.log.some((l: { key: string }) => l.key === 'log_gathered'));
+});
+
+test('with real AI the analyst reads the data pack and returns a sentiment block', async () => {
+  const ai = await import('../ai');
+  const original = { ...ai.ADAPTERS };
+  let seen = '';
+  const reading = { overall: { positive: 60, neutral: 30, negative: 10, score: 0.4 }, bySource: [{ source: 'hn', positive: 67, neutral: 0, negative: 33, n: 3 }], themes: [{ name: 'support', sentiment: -0.6, share: 33 }] };
+  const fake = {
+    async run(_k: Record<string, string>, req: import('../ai/types').RunRequest) {
+      seen = req.user;
+      const text = `## Acme sentiment\nMostly positive.\n\n\`\`\`json\n${JSON.stringify(reading)}\n\`\`\``;
+      req.onText(text);
+      return { text, tokensIn: 3000, tokensOut: 400, truncated: false };
+    },
+    async test() {},
+  };
+  for (const id of Object.keys(ai.ADAPTERS) as (keyof typeof ai.ADAPTERS)[]) ai.ADAPTERS[id] = fake;
+  try {
+    await call('/settings', { method: 'PUT', token: adminToken, body: { aiMode: 'auto' } });
+    const ws = (await call('/workspace', { token: adminToken })).data;
+    const created = await call('/tasks', {
+      method: 'POST',
+      token: adminToken,
+      body: { title: 'Acme check', pipeline: [ws.agents[0].id], size: 'S', priority: 'high', research: { query: 'Acme', sources: ['gdelt', 'hn'] } },
+    });
+    const t = await waitForTask(adminToken, created.data.id, (x) => x.column === 'review');
+    const out = t.outputs[0];
+    assert.equal(out.simulated, false);
+    assert.match(seen, /posts record profit/, 'news reach the prompt');
+    assert.match(seen, /Terrible support/, 'posts reach the prompt');
+    assert.equal(out.research.analysis.estimated, false);
+    assert.equal(out.research.analysis.overall.score, 0.4);
+    assert.equal(out.research.analysis.themes[0].name, 'support');
+    assert.ok(!out.text.includes('```json'), 'the JSON block is taken out of the report');
+  } finally {
+    Object.assign(ai.ADAPTERS, original);
+    await call('/settings', { method: 'PUT', token: adminToken, body: { aiMode: 'sim' } });
+  }
+});
+
+test('newsroom: a watchlist run becomes a report and leaves the board', async () => {
+  const ws = (await call('/workspace', { token: adminToken })).data;
+  const bad = await call('/watchlists', { method: 'POST', token: adminToken, body: { name: ' ', research: { query: '' }, agentId: ws.agents[0].id } });
+  assert.equal(bad.status, 400);
+  const notMine = await call('/watchlists', { method: 'POST', token: bobToken, body: { name: 'x', research: { query: 'Acme' }, agentId: ws.agents[0].id } });
+  assert.equal(notMine.status, 400, "can't use someone else's agent");
+
+  const w = await call('/watchlists', {
+    method: 'POST',
+    token: adminToken,
+    body: { name: 'Acme watch', scope: 'shared', research: { query: 'Acme', sources: ['gdelt', 'hn'] }, schedule: { every: 'daily', time: '07:30' }, agentId: ws.agents[0].id },
+  });
+  assert.equal(w.status, 200, JSON.stringify(w.json));
+  assert.ok(w.data.nextRunAt > Date.now());
+  assert.equal(new Date(w.data.nextRunAt).getHours(), 7);
+
+  const bobView = (await call('/workspace', { token: bobToken })).data.watchlists;
+  assert.ok(bobView.some((x: { id: string }) => x.id === w.data.id), 'shared watchlists are visible to the team');
+  assert.equal((await call(`/watchlists/${w.data.id}/run`, { method: 'POST', token: bobToken })).status, 403);
+
+  const run = await call(`/watchlists/${w.data.id}/run`, { method: 'POST', token: adminToken });
+  const taskId = run.data.runTaskId;
+  assert.ok(taskId);
+  assert.equal((await call(`/watchlists/${w.data.id}/run`, { method: 'POST', token: adminToken })).status, 409, 'one run at a time');
+  await waitForTask(adminToken, taskId, (x) => !x);
+
+  const after = (await call('/workspace', { token: adminToken })).data;
+  const list = after.watchlists.find((x: { id: string }) => x.id === w.data.id);
+  assert.equal(list.runTaskId, undefined);
+  assert.ok(list.lastRunAt);
+  const summary = after.watchSummaries.find((s: { watchlistId: string }) => s.watchlistId === w.data.id);
+  assert.equal(summary.trend.length, 1);
+  const reports = await call(`/watchlists/${w.data.id}/reports`, { token: bobToken });
+  assert.equal(reports.data.length, 1);
+  const report = await call(`/reports/${reports.data[0].id}`, { token: bobToken });
+  assert.equal(report.data.research.pack.news.length, 2);
+  assert.ok(after.feed.some((f: { key: string }) => f.key === 'feed_report'));
+
+  const del = await call(`/watchlists/${w.data.id}`, { method: 'DELETE', token: adminToken });
+  assert.equal(del.status, 200);
+  assert.equal((await call(`/reports/${reports.data[0].id}`, { token: adminToken })).status, 404);
+});
+
+test('watchlist schedules', async () => {
+  const { nextRun } = await import('../workspace/newsroom');
+  const now = new Date(2026, 9, 1, 10, 0).getTime(); // Thu 1 Oct 2026, 10:00
+  assert.equal(nextRun({ every: 'manual' }, undefined, now), undefined);
+  assert.equal(new Date(nextRun({ every: 'daily', time: '08:00' }, undefined, now)!).getDate(), 2, 'today 08:00 has passed');
+  assert.equal(new Date(nextRun({ every: 'daily', time: '18:00' }, undefined, now)!).getHours(), 18);
+  const weekly = new Date(nextRun({ every: 'weekly', time: '09:00', weekday: 1 }, undefined, now)!);
+  assert.equal(weekly.getDay(), 1);
+  assert.equal(weekly.getDate(), 5);
+  assert.equal(nextRun({ every: '6h' }, now - 3600 * 1000, now), now + 5 * 3600 * 1000);
 });
 
 test('changing email needs the current password', async () => {

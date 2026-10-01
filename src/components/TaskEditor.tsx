@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import type { ColumnId, Priority, RoleId, Scope, Size, Task } from '../types';
+import { DEFAULT_RESEARCH, type ColumnId, type Priority, type ResearchQuery, type RoleId, type Scope, type Size, type Task } from '../types';
 import { PIPELINE_TEMPLATES } from '../data/templates';
 import { toast } from '../lib/toast';
 import { findAnyAgent, useStore, useT, useTeam } from '../store';
 import { roleById } from '../../shared/roles';
 import { Avatar, Window } from './ui';
+import { ResearchFields } from './Newsroom';
 
 export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose: () => void; taskId?: string; preset?: Partial<Task> }) {
   const t = useT();
@@ -23,6 +24,7 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
   const [requireReview, setRequireReview] = useState(init.requireReview ?? true);
   const [column, setColumn] = useState<ColumnId>(init.column ?? 'todo');
   const [scope, setScope] = useState<Scope>(init.scope ?? 'personal');
+  const [research, setResearch] = useState<ResearchQuery | null>(init.research ?? null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -40,6 +42,7 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
       else missing.push(r);
     }
     setPipeline(picked);
+    if (roles.includes('analyst') && !research) setResearch({ ...DEFAULT_RESEARCH, query: title.trim() });
     if (missing.length) toast.warn(t('tplMissing', { roles: missing.map((r) => t(`role_${r}`)).join(', ') }));
   };
 
@@ -60,7 +63,11 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
       setError(t('personalOwnOnly'));
       return;
     }
-    const data = { title: title.trim(), description: description.trim(), priority, size, pipeline, requireReview, scope };
+    const data = {
+      title: title.trim(), description: description.trim(), priority, size, pipeline, requireReview, scope,
+      // null tells the server to drop research from an existing task
+      research: research ? { ...research, query: research.query.trim() || title.trim() } : existing?.research ? null : undefined,
+    };
     setBusy(true);
     try {
       if (existing) await updateTask(existing.id, data);
@@ -207,6 +214,14 @@ export function TaskEditor({ z, onClose, taskId, preset }: { z: number; onClose:
             ))}
           </div>
         </div>
+      </div>
+      <div className="field">
+        <label className="row" style={{ gap: 6, cursor: 'pointer' }}>
+          <input type="checkbox" checked={!!research} onChange={(e) => setResearch(e.target.checked ? { ...DEFAULT_RESEARCH, query: title.trim() } : null)} />
+          <strong>📰 {t('rq_toggle')}</strong>
+        </label>
+        <span className="hint">{t('rq_hint')}</span>
+        {research && <div style={{ marginTop: 6 }}><ResearchFields value={research} onChange={setResearch} /></div>}
       </div>
       <label className="row" style={{ gap: 6, cursor: 'pointer' }}>
         <input type="checkbox" checked={requireReview} onChange={(e) => setRequireReview(e.target.checked)} />

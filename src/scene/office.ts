@@ -1,4 +1,4 @@
-import { BOARD, CLOCK, LEFT_WINDOW, NOTES_AREA, RIGHT_WINDOW, SCENE_H, SCENE_W, WALL_H, type DeskPos } from './layout';
+import { BOARD, CLOCK, LEFT_WINDOW, NOTES_AREA, RIGHT_WINDOW, SCENE_H, SCENE_W, TV, WALL_H, type DeskPos } from './layout';
 import { mix, shade, tint } from '../sprites/color';
 
 export const FONT = '"Pixelify Sans", "Chakra Petch", sans-serif';
@@ -266,6 +266,44 @@ export function drawWallNotes(ctx: Ctx, notes: { color: string; unread: boolean 
     rect(ctx, x + 2, y + 6 + wob, 4, 1, shade(n.color, 0.3));
     rect(ctx, x + 4, y - 1 + wob, 2, 2, '#d8383f');
   });
+}
+
+/**
+ * Newsroom TV: the latest watchlist's sentiment trend with a scrolling ticker; a blinking LIVE dot
+ * while an agent is doing a run.
+ */
+export function drawTv(ctx: Ctx, t: number, o: { trend: number[]; live: boolean; hover: boolean }): void {
+  const { x, y, w, h } = TV;
+  rect(ctx, x + 2, y + 2, w, h, 'rgba(60,30,10,0.25)');
+  rect(ctx, x, y, w, h, o.hover ? '#4a4366' : INK);
+  const sx = x + 2;
+  const sy = y + 2;
+  const sw = w - 4;
+  const sh = h - 6;
+  rect(ctx, sx, sy, sw, sh, '#1d3557');
+  // Trend line (scores −1…1) over a faint zero line.
+  rect(ctx, sx, sy + Math.floor(sh / 2) - 2, sw, 1, '#2f4b73');
+  if (o.trend.length > 1) {
+    const pts = o.trend.slice(-8);
+    for (let i = 0; i < pts.length; i++) {
+      const px = sx + 1 + Math.round((i / (pts.length - 1)) * (sw - 3));
+      const py = sy + 1 + Math.round(((1 - pts[i]) / 2) * (sh - 6));
+      rect(ctx, px, py, 2, 2, pts[i] >= 0 ? '#8fd3ff' : '#ff8a80');
+    }
+  } else {
+    text(ctx, 'NEWS', sx + sw / 2, sy + sh / 2 - 2, { size: 5, color: '#cfe3ff', weight: 700 });
+  }
+  // Ticker band
+  rect(ctx, sx, sy + sh - 4, sw, 4, '#e8d9b8');
+  const off = Math.floor(t * 8) % 12;
+  for (let bx = -off; bx < sw; bx += 12) {
+    const x0 = Math.max(0, bx);
+    const x1 = Math.min(sw, bx + 7);
+    if (x1 > x0) rect(ctx, sx + x0, sy + sh - 3, x1 - x0, 2, '#6b5f73');
+  }
+  if (o.live && Math.floor(t * 2) % 2 === 0) rect(ctx, sx + sw - 4, sy + 1, 3, 3, '#ff4d4d');
+  // Stand-by light & bezel
+  rect(ctx, x + w - 5, y + h - 3, 2, 1, o.live ? '#ff4d4d' : '#5ec27a');
 }
 
 // ─── Furniture ──────────────────────────────────────────────────────────────

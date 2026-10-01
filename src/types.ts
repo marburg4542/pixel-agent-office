@@ -1,5 +1,6 @@
 // Client-only types; everything shared with the server lives in shared/types.ts.
 export * from '../shared/types';
+export * from '../shared/research';
 import type { Note, Task } from '../shared/types';
 
 export type Modal =
@@ -13,6 +14,8 @@ export type Modal =
   | { kind: 'settings'; tab?: SettingsTab }
   | { kind: 'users' }
   | { kind: 'help'; step?: number }
+  | { kind: 'newsroom'; watchlistId?: string }
+  | { kind: 'watchEdit'; watchlistId?: string }
   | { kind: 'confirm'; message: string; onYes: () => void; danger?: boolean };
 
 export type SettingsTab = 'profile' | 'sound' | 'ai' | 'keys' | 'data';

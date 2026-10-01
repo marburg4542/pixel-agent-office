@@ -112,6 +112,7 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
 
       <div className="tb-group">
         <button className="btn warn sm" onClick={() => openModal({ kind: 'board' })}>📋 {t('board')}</button>
+        <button className="btn sm" onClick={() => openModal({ kind: 'newsroom' })}>📺 {t('newsroom')}</button>
         <button className="btn sm" disabled={agents >= MAX_DESKS} title={agents >= MAX_DESKS ? t('officeFull') : ''} onClick={() => openModal({ kind: 'agentEdit' })}>
           ➕ {t('hire')}
         </button>

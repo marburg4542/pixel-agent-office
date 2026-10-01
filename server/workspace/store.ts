@@ -10,6 +10,7 @@ import { DEFAULT_SETTINGS, MAX_DESKS, SIM_SPEEDS } from '../../shared/constants'
 import { ROLES } from '../../shared/roles';
 import { uid } from '../../shared/util';
 import { translate } from '../../shared/i18n';
+import { normalizeQuery, type ResearchQuery } from '../../shared/research';
 import type {
   Agent, ColumnId, FeedItem, Lang, Look, LogParams, ModelDef, Note, Priority, PublicUser, Scope, Size,
   StageOutput, Task, TeamAgent, UserSettings,
@@ -31,8 +32,12 @@ const settings = new Map<number, StoredSettings>();
 const models = new Map<number, ModelDef[]>();
 const users = new Map<number, Pick<UserRow, 'id' | 'username' | 'role' | 'status'>>();
 
-/** Worker hooks (set by the worker to avoid an import cycle). */
-export const hooks: { settingsChanged?: (userId: number) => void } = {};
+/** Hooks for the worker and the Newsroom (set by them, to avoid import cycles). */
+export const hooks: {
+  settingsChanged?: (userId: number) => void;
+  agentRemoved?: (agent: Agent) => void;
+  userForgotten?: (userId: number) => void;
+} = {};
 
 // ─── Persistence ─────────────────────────────────────────────────────────────
 
@@ -93,6 +98,7 @@ export function refreshUsers(): void {
 
 const activeUserIds = () => [...users.values()].filter((u) => u.status === 'Active').map((u) => u.id);
 const userName = (id: number) => users.get(id)?.username ?? '?';
+export { activeUserIds, userName };
 
 // ─── Serialization & audiences ───────────────────────────────────────────────
 
@@ -368,6 +374,7 @@ function removeAgent(a: Agent): void {
     }
   }
   sendTo(activeUserIds(), 'agent-deleted', { id: a.id });
+  hooks.agentRemoved?.(a);
 }
 
 export function deleteAgent(u: AuthUser, id: string): void {
@@ -416,7 +423,12 @@ interface TaskInput {
   requireReview?: boolean;
   scope?: Scope;
   column?: ColumnId;
+  /** null removes it */
+  research?: Partial<ResearchQuery> | null;
 }
+
+const researchOf = (input: TaskInput['research'], title: string): ResearchQuery | undefined =>
+  input ? normalizeQuery(input, title) : undefined;
 
 export function createTask(u: AuthUser, input: TaskInput): Task {
   const title = String(input.title ?? '').trim().slice(0, 120);
@@ -433,6 +445,8 @@ export function createTask(u: AuthUser, input: TaskInput): Task {
     requireReview: input.requireReview !== false,
     column: input.column === 'backlog' ? 'backlog' : 'todo',
   });
+  const research = researchOf(input.research, title);
+  if (research) task.research = research;
   const created = commitTask(task);
   if (scope === 'shared') pushFeed(activeUserIds().filter((id) => id !== u.id), 'feed_sharedTask', { user: u.username, task: title });
   return created;
@@ -453,6 +467,8 @@ export function updateTask(u: AuthUser, id: string, input: TaskInput): Task {
   if (PRIORITIES.includes(input.priority!)) next.priority = input.priority!;
   if (SIZES.includes(input.size!)) next.size = input.size!;
   if (typeof input.requireReview === 'boolean') next.requireReview = input.requireReview;
+  if (input.research === null) delete next.research;
+  else if (input.research) next.research = researchOf(input.research, next.title);
   if (input.pipeline !== undefined || scope !== t.scope) {
     next.pipeline = checkPipeline(u, scope, input.pipeline ?? t.pipeline, t.pipeline);
     next.stage = Math.min(next.stage, next.pipeline.length);
@@ -618,6 +634,22 @@ export function completeStage(taskId: string, output: StageOutput): { next: stri
 }
 
 export { taskFeedAudience };
+
+/** A task the server creates itself (Newsroom runs) — the caller already checked who may do this. */
+export function createSystemTask(fields: Partial<Task> & Pick<Task, 'scope' | 'ownerId' | 'title' | 'pipeline'>): Task {
+  const task = makeTask(fields);
+  commitTask(task);
+  return task;
+}
+
+/** Remove a task without permission checks (finished Newsroom runs). */
+export function dropTask(id: string): void {
+  const t = tasks.get(id);
+  if (!t) return;
+  tasks.delete(id);
+  q.taskDelete.run(id);
+  sendTo(taskAudience(t), 'task-deleted', { id });
+}
 
 // ─── Notes ───────────────────────────────────────────────────────────────────
 
@@ -842,6 +874,7 @@ export function forgetUser(userId: number): void {
   }
   settings.delete(userId);
   models.delete(userId);
+  hooks.userForgotten?.(userId);
   refreshUsers();
 }
 

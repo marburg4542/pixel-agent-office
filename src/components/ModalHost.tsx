@@ -1,6 +1,7 @@
-import { useEffect } from 'react';
+import { Component, useEffect, type ReactNode } from 'react';
 import { useStore, useT } from '../store';
 import type { Modal } from '../types';
+import { translate } from '../../shared/i18n';
 import { AgentDetail } from './AgentDetail';
 import { AgentEditor } from './AgentEditor';
 import { BoardModal } from './BoardModal';
@@ -11,6 +12,7 @@ import { TaskEditor } from './TaskEditor';
 import { SettingsWindow } from './SettingsWindow';
 import { UsersWindow } from './UsersWindow';
 import { HelpWindow } from './HelpWindow';
+import { NewsroomWindow, WatchlistEditor } from './Newsroom';
 import { Window } from './ui';
 
 export function ModalHost() {
@@ -28,10 +30,36 @@ export function ModalHost() {
   return (
     <>
       {modals.map((m, i) => (
-        <ModalView key={i} modal={m} z={i} />
+        <WindowBoundary key={i} z={i} onClose={closeModal}>
+          <ModalView modal={m} z={i} />
+        </WindowBoundary>
       ))}
     </>
   );
+}
+
+/** A window that fails to render shows an error in its place instead of blanking the whole office. */
+class WindowBoundary extends Component<{ z: number; onClose: () => void; children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error('window crashed', error);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    const lang = useStore.getState().settings.lang;
+    return (
+      <Window z={this.props.z} width={420} title="⚠️" onClose={this.props.onClose}>
+        <p style={{ marginTop: 0 }}>{translate(lang, 'windowCrashed')}</p>
+        <code className="blocked-reason">{this.state.error.message}</code>
+      </Window>
+    );
+  }
 }
 
 function ModalView({ modal, z }: { modal: Modal; z: number }) {
@@ -58,6 +86,10 @@ function ModalView({ modal, z }: { modal: Modal; z: number }) {
       return <UsersWindow z={z} onClose={onClose} />;
     case 'help':
       return <HelpWindow z={z} onClose={onClose} step={modal.step} />;
+    case 'newsroom':
+      return <NewsroomWindow z={z} onClose={onClose} watchlistId={modal.watchlistId} />;
+    case 'watchEdit':
+      return <WatchlistEditor z={z} onClose={onClose} watchlistId={modal.watchlistId} />;
     case 'confirm':
       return <Confirm z={z} modal={modal} onClose={onClose} />;
   }

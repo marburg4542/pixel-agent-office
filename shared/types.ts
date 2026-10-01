@@ -1,4 +1,5 @@
 // Types shared by the browser app and the server.
+import type { ResearchQuery, ResearchResult, Watchlist, WatchSummary } from './research';
 
 export type Lang = 'th' | 'en';
 
@@ -91,6 +92,8 @@ export interface StageOutput {
   tokensIn?: number;
   tokensOut?: number;
   costUsd?: number;
+  /** News & sentiment data and the reading of it (analyst steps of research tasks). */
+  research?: ResearchResult;
 }
 
 export type LogParams = Record<string, string | number>;
@@ -127,6 +130,10 @@ export interface Task {
   doneAt?: number;
   /** A real AI call failed (bad key, rate limit…). Agents skip the task until `until` or a manual retry. */
   blocked?: { reason: string; kind: string; at: number; until?: number };
+  /** Makes the analyst step (or the first step) gather news & social data before writing. */
+  research?: ResearchQuery;
+  /** Set on the run task of a Newsroom watchlist. */
+  watchlistId?: string;
 }
 
 export interface Note {
@@ -215,6 +222,8 @@ export interface Workspace {
   usage: UsageSummary;
   /** Text streamed so far for steps a real model is answering right now, by task id. */
   live: Record<string, LiveText>;
+  watchlists: Watchlist[];
+  watchSummaries: WatchSummary[];
   serverTime: number;
 }
 

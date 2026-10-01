@@ -6,17 +6,18 @@ import { PROVIDERS } from '../../shared/models';
 import { roleById } from '../../shared/roles';
 import { translate } from '../../shared/i18n';
 import type { Look, Note } from '../types';
-import { BOARD, DESKS, NOTES_AREA, inRect, seatOf, type Pt } from './layout';
+import { BOARD, DESKS, NOTES_AREA, TV, inRect, seatOf, type Pt } from './layout';
 import {
   drawBoard, drawBubble, drawCabinet, drawChair, drawClockHands, drawDesk, drawEnvelope, drawPaper,
-  drawPlant, drawProgress, drawWallNotes, drawWaterCooler, drawWindows, rect, text,
+  drawPlant, drawProgress, drawTv, drawWallNotes, drawWaterCooler, drawWindows, rect, text,
 } from './office';
 
 export type HoverTarget =
   | { kind: 'agent'; id: string }
   | { kind: 'board' }
   | { kind: 'desk'; index: number }
-  | { kind: 'note'; id: string };
+  | { kind: 'note'; id: string }
+  | { kind: 'tv' };
 
 const PRIO = { high: 0, med: 1, low: 2 } as const;
 
@@ -43,6 +44,8 @@ export function renderScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElement
       .map((x) => ({ priority: x.priority, active: x.active, blocked: !!x.blocked })),
   }));
   drawBoard(ctx, columns, translate(s.settings.lang, 'board'), hover?.kind === 'board', t);
+  const latest = [...s.watchSummaries].sort((a, b) => b.at - a.at)[0];
+  drawTv(ctx, t, { trend: latest?.trend.map((p) => p.v) ?? [], live: s.watchlists.some((w) => !!w.runTaskId), hover: hover?.kind === 'tv' });
   drawWallNotes(ctx, s.notes.map((n) => ({ color: NOTE_COLORS[n.color] ?? NOTE_COLORS[0], unread: noteUnread(n, s) })), t);
 
   // Depth-sorted scene objects
@@ -139,6 +142,7 @@ export function hitTest(p: Pt, s: State): HoverTarget | null {
     const n = s.notes[row * 3 + col];
     if (col < 3 && n && (p.x - NOTES_AREA.x) % 11 < 9) return { kind: 'note', id: n.id };
   }
+  if (inRect(p, TV)) return { kind: 'tv' };
   if (inRect(p, { x: BOARD.x, y: BOARD.y - 6, w: BOARD.w, h: BOARD.h + 6 }) || inRect(p, NOTES_AREA)) return { kind: 'board' };
   for (const d of DESKS) {
     if (p.x >= d.x - 26 && p.x <= d.x + 26 && p.y >= d.y - 42 && p.y <= d.y + 2) {

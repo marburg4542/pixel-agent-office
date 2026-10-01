@@ -6,7 +6,7 @@ import { useStore } from '../store';
 
 const STORE_EVENTS = [
   'task', 'task-deleted', 'task-progress', 'task-stream', 'note', 'note-deleted', 'agent', 'team-agent', 'agent-deleted', 'models', 'settings', 'feed',
-  'runtime', 'keys-changed', 'usage-changed',
+  'runtime', 'keys-changed', 'usage-changed', 'watchlist', 'watchlist-deleted', 'watch-report',
 ];
 const BUS_EVENTS = ['bubble', 'stage-done', 'handoff', 'users', 'session-replaced', 'account-disabled'];
 

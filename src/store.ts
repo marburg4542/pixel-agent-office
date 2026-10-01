@@ -3,7 +3,7 @@
 import { create } from 'zustand';
 import type {
   Agent, AgentRuntime, ApiKeyStatus, ColumnId, FeedItem, Lang, LiveText, LogParams, Modal, ModelDef, Note, PublicUser, Task, TeamAgent, UsageSummary,
-  UserSettings, Workspace,
+  UserSettings, Watchlist, WatchSummary, Workspace,
 } from './types';
 import { DEFAULT_SETTINGS } from '../shared/constants';
 import { translate } from '../shared/i18n';
@@ -28,6 +28,8 @@ interface Data {
   usage: UsageSummary;
   /** Text a real model is writing right now, by task id. */
   live: Record<string, LiveText>;
+  watchlists: Watchlist[];
+  watchSummaries: WatchSummary[];
   /** serverTime − Date.now(), to extrapolate runtime values that carry server timestamps. */
   clockOffset: number;
   loaded: boolean;
@@ -50,8 +52,8 @@ interface Actions {
   updateAgent: (id: string, patch: Partial<Agent>) => Promise<Agent>;
   removeAgent: (id: string) => Promise<void>;
 
-  addTask: (t: Partial<Task>) => Promise<Task>;
-  updateTask: (id: string, patch: Partial<Task>) => Promise<Task>;
+  addTask: (t: TaskPatch) => Promise<Task>;
+  updateTask: (id: string, patch: TaskPatch) => Promise<Task>;
   deleteTask: (id: string) => Promise<void>;
   moveTask: (id: string, column: ColumnId) => Promise<void>;
   restartTask: (id: string) => Promise<void>;
@@ -60,6 +62,10 @@ interface Actions {
   retryTask: (id: string) => Promise<void>;
   setKeys: (keys: ApiKeyStatus[]) => void;
   refreshUsage: () => Promise<void>;
+
+  saveWatchlist: (id: string | undefined, input: WatchlistInput) => Promise<Watchlist>;
+  deleteWatchlist: (id: string) => Promise<void>;
+  runWatchlist: (id: string) => Promise<void>;
 
   addNote: (n: NoteInput) => Promise<Note>;
   updateNote: (id: string, patch: NoteInput) => Promise<Note>;
@@ -79,6 +85,11 @@ export type State = Data & { modals: Modal[] } & Actions;
 /** `null` prices clear them. */
 export type ModelPatch = Partial<Omit<ModelDef, 'priceIn' | 'priceOut'>> & { priceIn?: number | null; priceOut?: number | null };
 
+export type WatchlistInput = Partial<Pick<Watchlist, 'name' | 'scope' | 'research' | 'schedule' | 'agentId'>>;
+
+/** `research: null` removes the research from a task. */
+export type TaskPatch = Omit<Partial<Task>, 'research'> & { research?: Task['research'] | null };
+
 /** `taskId: null` unlinks a note from its task. */
 export type NoteInput = Partial<Omit<Note, 'taskId'>> & { taskId?: string | null };
 
@@ -95,6 +106,8 @@ const empty = (): Data => ({
   keys: [],
   usage: { month: '', costUsd: 0, tokensIn: 0, tokensOut: 0, calls: 0, byModel: [] },
   live: {},
+  watchlists: [],
+  watchSummaries: [],
   clockOffset: 0,
   loaded: false,
 });
@@ -172,6 +185,8 @@ export const useStore = create<State>()((set, get) => {
         keys: ws.keys,
         usage: ws.usage,
         live: ws.live ?? {},
+        watchlists: ws.watchlists ?? [],
+        watchSummaries: ws.watchSummaries ?? [],
         clockOffset: ws.serverTime - Date.now(),
         loaded: true,
       });
@@ -260,6 +275,20 @@ export const useStore = create<State>()((set, get) => {
     setKeys: (keys) => set({ keys }),
     refreshUsage: async () => set({ usage: await api<UsageSummary>('/usage') }),
 
+    saveWatchlist: async (id, input) => {
+      const w = await api<Watchlist>(id ? `/watchlists/${id}` : '/watchlists', { method: id ? 'PUT' : 'POST', body: input });
+      set((s) => ({ watchlists: upsert(s.watchlists, w) }));
+      return w;
+    },
+    deleteWatchlist: async (id) => {
+      await api(`/watchlists/${id}`, { method: 'DELETE' });
+      set((s) => ({ watchlists: without(s.watchlists, id), watchSummaries: s.watchSummaries.filter((x) => x.watchlistId !== id) }));
+    },
+    runWatchlist: async (id) => {
+      const w = await api<Watchlist>(`/watchlists/${id}/run`, { method: 'POST' });
+      set((s) => ({ watchlists: upsert(s.watchlists, w) }));
+    },
+
     addNote: async (n) => {
       const note = await api<Note>('/notes', { method: 'POST', body: n });
       set((s) => ({ notes: upsert(s.notes, note) }));
@@ -310,6 +339,19 @@ export const useStore = create<State>()((set, get) => {
         case 'keys-changed':
           set({ keys: data as ApiKeyStatus[] });
           break;
+        case 'watchlist':
+          set({ watchlists: upsert(s.watchlists, data as Watchlist) });
+          break;
+        case 'watchlist-deleted': {
+          const id = (data as { id: string }).id;
+          set({ watchlists: without(s.watchlists, id), watchSummaries: s.watchSummaries.filter((x) => x.watchlistId !== id) });
+          break;
+        }
+        case 'watch-report': {
+          const { summary } = data as { summary?: WatchSummary };
+          if (summary) set({ watchSummaries: [...s.watchSummaries.filter((x) => x.watchlistId !== summary.watchlistId), summary] });
+          break;
+        }
         case 'usage-changed':
           void get().refreshUsage().catch(() => {});
           break;

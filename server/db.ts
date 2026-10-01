@@ -104,9 +104,34 @@ db.exec(`
     calls INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, month, model_id)
   );
+
+  -- Newsroom: watchlists and the reports their runs produce (the newest ~30 per watchlist are kept).
+  CREATE TABLE IF NOT EXISTS watchlists (
+    id TEXT PRIMARY KEY,
+    owner_id INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+    data TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS reports (
+    id TEXT PRIMARY KEY,
+    watchlist_id TEXT NOT NULL REFERENCES watchlists(id) ON DELETE CASCADE,
+    at INTEGER NOT NULL,
+    score REAL NOT NULL DEFAULT 0,
+    label TEXT NOT NULL DEFAULT '',
+    data TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS reports_watch_at ON reports(watchlist_id, at);
 `);
 
-export const logAudit = (actor: string | null | undefined, action: string, entityType?: string, entityId?: string | number, details: object = {}) => {
+/** Columns added after a table first shipped — CREATE TABLE IF NOT EXISTS never adds them to an existing table. */
+function addColumn(table: string, column: string, definition: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+addColumn('reports', 'score', 'REAL NOT NULL DEFAULT 0');
+addColumn('reports', 'label', "TEXT NOT NULL DEFAULT ''");
+
+export const logAudit =(actor: string | null | undefined, action: string, entityType?: string, entityId?: string | number, details: object = {}) => {
   db.prepare(`INSERT INTO audit_logs (actor_username, action, entity_type, entity_id, details) VALUES (?, ?, ?, ?, ?)`).run(
     actor || null,
     action,
