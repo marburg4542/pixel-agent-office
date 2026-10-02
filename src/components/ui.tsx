@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useState, type ReactNode } from 'react';
 import type { Look, ProviderId, PublicUser, RoleId } from '../types';
-import { avatarUrl } from '../sprites/character';
+import { AVATAR_H, SPR_W, avatarUrl } from '../sprites/character';
 import { PROVIDERS } from '../../shared/models';
 import { roleById } from '../../shared/roles';
 import { useStore, useT } from '../store';
@@ -51,7 +51,7 @@ export function Window(props: {
 }
 
 export function Avatar({ look, size = 34, className }: { look: Look; size?: number; className?: string }) {
-  return <img className={`pixelated ${className ?? ''}`} src={avatarUrl(look)} width={size} height={Math.round((size * 17) / 16)} alt="" />;
+  return <img className={`pixelated ${className ?? ''}`} src={avatarUrl(look)} width={size} height={Math.round((size * AVATAR_H) / SPR_W)} alt="" />;
 }
 
 /** A person's profile picture, or their initial on a colored tile. */

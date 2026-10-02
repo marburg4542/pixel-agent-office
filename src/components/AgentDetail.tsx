@@ -52,7 +52,7 @@ export function AgentDetail({ z, onClose, agentId }: { z: number; onClose: () =>
     >
       <div className="agent-head">
         <div className="agent-portrait">
-          <SpritePreview look={agent.look} anim={status === 'working' ? 'work' : status === 'walking' ? 'walk' : 'idle'} scale={5} />
+          <SpritePreview look={agent.look} anim={status === 'working' ? 'work' : status === 'walking' ? 'walk' : 'idle'} scale={4} />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="agent-name">{agent.name}</div>

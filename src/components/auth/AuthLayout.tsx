@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { drawBoard, drawClockHands, drawWindows, renderBackground } from '../../scene/office';
-import { COLUMNS } from '../../../shared/constants';
-import { SCENE_H, SCENE_W } from '../../scene/layout';
+import { ISO_H, ISO_W } from '../../scene/iso/geom';
+import { renderIsoEmptyRoom } from '../../scene/iso/render';
 import { SpritePreview } from '../SpritePreview';
 import { randomLook } from '../../sprites/character';
 import { useStore, useT } from '../../store';
@@ -17,24 +16,21 @@ export function AuthLayout({ title, children }: { title: string; children: React
   useEffect(() => {
     const c = bgRef.current;
     if (!c) return;
+    // Drawn at 2× so the text on the wall board stays legible.
     const ctx = c.getContext('2d')!;
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(renderBackground(), 0, 0);
-    const now = new Date();
-    drawWindows(ctx, now, 0);
-    drawClockHands(ctx, now);
-    drawBoard(ctx, COLUMNS.map((id) => ({ id, cards: [] })), 'Pixel Office', false, 0);
+    ctx.setTransform(2, 0, 0, 2, 0, 0);
+    renderIsoEmptyRoom(ctx, 'Pixel Office');
   }, []);
 
   return (
     <div className="auth-page">
-      <canvas ref={bgRef} className="auth-bg pixelated" width={SCENE_W} height={SCENE_H} aria-hidden />
+      <canvas ref={bgRef} className="auth-bg pixelated" width={ISO_W * 2} height={ISO_H * 2} aria-hidden />
       <button className="btn dark sm auth-lang" onClick={() => setLang(lang === 'th' ? 'en' : 'th')}>
         🌐 {t('language')}
       </button>
       <div className="auth-stack">
         <div className="auth-greeter">
-          <SpritePreview look={greeter} scale={5} anim="idle" />
+          <SpritePreview look={greeter} scale={4} anim="idle" />
         </div>
         <div className="window auth-window">
           <div className="titlebar">
