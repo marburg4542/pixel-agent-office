@@ -2,7 +2,8 @@
 // positions and animation for the canvas. All decisions happen on the server — nothing here
 // changes data.
 import { runtimeValue, useStore } from '../store';
-import { AISLE_MID, AISLE_TOP, BOARD_SLOTS, DESKS, SCENE_W, pathFromBoard, pathToBoard, seatOf, type DeskPos, type Pt } from '../scene/layout';
+import { BOARD_SLOTS, DESKS, DESK_H, DOOR_POINT, SPOTS, faceFor, pathLength, pointAlong, route, seatOf, type Facing, type GPt } from '../scene/iso/layout';
+import { toScreen, type Pt } from '../scene/iso/geom';
 import type { EmoteKind } from '../scene/office';
 import { TRIP_ARRIVE, TRIP_LEAVE } from '../../shared/constants';
 import { PROVIDERS } from '../../shared/models';
@@ -17,9 +18,12 @@ export type AgentStatus = 'idle' | 'walking' | 'reading' | 'working';
 export interface VisualAgent {
   id: string;
   desk: number;
-  x: number;
-  y: number;
-  facing: 'front' | 'back' | 'left' | 'right';
+  /** Where the feet are, in floor tiles. */
+  gx: number;
+  gy: number;
+  facing: Facing;
+  /** In the chair at the desk (as opposed to standing somewhere). */
+  seated: boolean;
   moving: boolean;
   /** distance walked — drives the leg animation */
   walkDist: number;
@@ -39,35 +43,17 @@ export interface VisualAgent {
 }
 
 interface Wander {
-  kind: 'coffee' | 'plant';
-  there: Pt[];
+  kind: 'drink' | 'plant';
+  there: GPt[];
+  face: Facing;
   len: number;
   d: number;
   phase: 'go' | 'stay' | 'back';
   stay: number;
 }
 
-/** Where idle agents like to go. */
-const SPOTS = {
-  coffee: { x: 374, y: 174 },
-  plantL: { x: 28, y: 92 },
-  plantR: { x: 372, y: 92 },
-};
-const CORRIDOR_XS = [106, 200, 294];
-const WANDER_SPEED = 26;
-
-/** Seat → spot, along the aisles (row-0 desks go around their desk through a corridor). */
-function pathToSpot(desk: DeskPos, spot: Pt, viaMid: boolean): Pt[] {
-  const seat = seatOf(desk);
-  if (!viaMid) {
-    const pts = pathToBoard(desk, spot.x);
-    pts[pts.length - 1] = spot;
-    return [seat, ...pts];
-  }
-  if (desk.row === 1) return [seat, { x: seat.x, y: AISLE_MID }, { x: spot.x, y: AISLE_MID }, spot];
-  const cx = CORRIDOR_XS.reduce((b, c) => (Math.abs(c - seat.x) < Math.abs(b - seat.x) ? c : b), CORRIDOR_XS[0]);
-  return [seat, { x: seat.x, y: AISLE_TOP }, { x: cx, y: AISLE_TOP }, { x: cx, y: AISLE_MID }, { x: spot.x, y: AISLE_MID }, spot];
-}
+/** Tiles per second when strolling. */
+const WANDER_SPEED = 1.3;
 
 interface Particle {
   x: number;
@@ -91,28 +77,9 @@ interface Flyer {
 
 const CONFETTI = ['#f2c94c', '#e05a8a', '#4f7cf0', '#4fbf7a', '#f08a3c'];
 const PRIORITY_RANK = { high: 0, med: 1, low: 2 } as const;
-const DOOR: Pt = { x: SCENE_W + 12, y: 150 };
 
-const pathLength = (pts: Pt[]) => pts.slice(1).reduce((sum, p, i) => sum + Math.hypot(p.x - pts[i].x, p.y - pts[i].y), 0);
-
-function pointAlong(pts: Pt[], dist: number): { p: Pt; dy: number; dx: number } {
-  let left = dist;
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1];
-    const b = pts[i];
-    const len = Math.hypot(b.x - a.x, b.y - a.y);
-    if (left <= len || i === pts.length - 1) {
-      const k = len ? Math.min(1, left / len) : 1;
-      return { p: { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k }, dx: b.x - a.x, dy: b.y - a.y };
-    }
-    left -= len;
-  }
-  return { p: pts[pts.length - 1], dx: 0, dy: 0 };
-}
-
-/** Which way to face while walking along (dx, dy). */
-const faceFor = (dx: number, dy: number): VisualAgent['facing'] =>
-  Math.abs(dy) > Math.abs(dx) ? (dy < 0 ? 'back' : 'front') : dx < 0 ? 'left' : 'right';
+/** Screen point at some height above an agent's feet. */
+export const agentPoint = (va: VisualAgent, z: number): Pt => toScreen(va.gx, va.gy, z);
 
 /** Is this note addressed to this agent? Mirrors the server rule. */
 const noteTargets = (n: Note, a: Agent) => n.to === a.id || (n.to === 'all' && (n.scope === 'shared' || n.createdBy === a.ownerId));
@@ -138,7 +105,8 @@ class Engine {
     onServerEvent('stage-done', (d) => {
       const va = this.agents.get((d as { agentId: string }).agentId);
       if (va) {
-        this.burst(va.x, va.y - 24);
+        const p = agentPoint(va, 34);
+        this.burst(p.x, p.y);
         va.emote = { kind: 'heart', t: 2.5 };
       }
       play('done');
@@ -211,6 +179,7 @@ class Engine {
       va.moving = false;
       va.taskId = rt?.taskId;
 
+      va.seated = false;
       if (rt?.status === 'trip' || rt?.status === 'working') va.wander = null;
       if (rt?.status === 'trip') {
         this.placeOnTrip(va, runtimeValue(rt, s.clockOffset));
@@ -218,9 +187,10 @@ class Engine {
         if (!s.settings.paused) this.stepWander(va, dt);
       } else {
         if (va.status === 'walking' || va.status === 'reading') va.slot = null;
-        va.x = seat.x;
-        va.y = seat.y;
-        va.facing = 'front';
+        va.gx = seat.gx;
+        va.gy = seat.gy;
+        va.facing = 'sw';
+        va.seated = true;
         if (rt?.status === 'working') {
           va.status = 'working';
           va.progress = runtimeValue(rt, s.clockOffset);
@@ -247,7 +217,7 @@ class Engine {
       if (!va) {
         const seat = seatOf(DESKS[a.desk] ?? DESKS[0]);
         this.agents.set(a.id, {
-          id: a.id, desk: a.desk, x: seat.x, y: seat.y, facing: 'front', moving: false, walkDist: 0, typeT: 0, status: 'idle', bubble: null,
+          id: a.id, desk: a.desk, gx: seat.gx, gy: seat.gy, facing: 'sw', seated: true, moving: false, walkDist: 0, typeT: 0, status: 'idle', bubble: null,
           blinkT: 1 + Math.random() * 3, blinking: false, idleSince: this.realTime, slot: null, progress: 0, emote: null, wander: null,
         });
       } else if (va.desk !== a.desk) {
@@ -261,21 +231,25 @@ class Engine {
     if (va.status !== 'idle' || this.realTime - va.idleSince < 15 || Math.random() > dt / 45) return false;
     if ([...this.agents.values()].filter((o) => o.wander).length >= 2) return false;
     const desk = DESKS[va.desk] ?? DESKS[0];
-    const coffee = Math.random() < 0.6;
-    const spot = coffee ? SPOTS.coffee : seatOf(desk).x < 200 ? SPOTS.plantL : SPOTS.plantR;
-    const there = pathToSpot(desk, spot, coffee);
-    va.wander = { kind: coffee ? 'coffee' : 'plant', there, len: pathLength(there), d: 0, phase: 'go', stay: coffee ? 4 : 3 };
+    const r = Math.random();
+    const spot = r < 0.4 ? SPOTS.coffee : r < 0.6 ? SPOTS.water : seatOf(desk).gx < 9 ? SPOTS.plantL : SPOTS.plantR;
+    const drink = spot === SPOTS.coffee || spot === SPOTS.water;
+    const there = route(desk, spot, spot.aisle);
+    va.wander = { kind: drink ? 'drink' : 'plant', there, face: spot.face, len: pathLength(there), d: 0, phase: 'go', stay: drink ? 4 : 3 };
     return true;
   }
 
   private stepWander(va: VisualAgent, dt: number) {
     const w = va.wander!;
     if (w.phase === 'stay') {
-      va.facing = w.kind === 'coffee' ? 'right' : 'back';
-      if (!va.emote) va.emote = { kind: w.kind === 'coffee' ? 'cup' : 'drop', t: w.stay };
+      va.facing = w.face;
+      if (!va.emote) va.emote = { kind: w.kind === 'drink' ? 'cup' : 'drop', t: w.stay };
       if (w.kind === 'plant' && Math.random() < dt * 6) {
+        // Water drips just in front of where they're facing.
         const spot = w.there[w.there.length - 1];
-        this.particles.push({ x: spot.x - 12 + Math.random() * 6, y: spot.y - 14, vx: 0, vy: 12, g: 30, life: 0.6, max: 0.6, color: '#7ec8ff' });
+        const ahead = w.face === 'nw' ? { gx: spot.gx - 0.5, gy: spot.gy - 0.5 } : { gx: spot.gx + 0.5, gy: spot.gy + 0.5 };
+        const p = toScreen(ahead.gx, ahead.gy, 18);
+        this.particles.push({ x: p.x - 3 + Math.random() * 6, y: p.y, vx: 0, vy: 12, g: 30, life: 0.6, max: 0.6, color: '#7ec8ff' });
       }
       if ((w.stay -= dt) <= 0) {
         w.phase = 'back';
@@ -287,12 +261,12 @@ class Engine {
     w.d += WANDER_SPEED * dt;
     const path = w.phase === 'go' ? w.there : [...w.there].reverse();
     const pos = pointAlong(path, Math.min(w.d, w.len));
-    va.x = pos.p.x;
-    va.y = pos.p.y;
+    va.gx = pos.p.gx;
+    va.gy = pos.p.gy;
     va.walkDist = w.d;
     va.moving = true;
     va.status = 'walking';
-    va.facing = faceFor(pos.dx, pos.dy);
+    va.facing = faceFor(pos.dgx, pos.dgy);
     if (w.d >= w.len) {
       if (w.phase === 'go') w.phase = 'stay';
       else {
@@ -311,10 +285,9 @@ class Engine {
       if (va.slot < 0) va.slot = 0;
     }
     const desk = DESKS[va.desk] ?? DESKS[0];
-    const slotX = BOARD_SLOTS[va.slot];
-    const there = [seatOf(desk), ...pathToBoard(desk, slotX)];
-    const back = [there[there.length - 1], ...pathFromBoard(desk, slotX)];
-    let pos: { p: Pt; dx: number; dy: number };
+    const there = route(desk, BOARD_SLOTS[va.slot]);
+    const back = [...there].reverse();
+    let pos: { p: GPt; dgx: number; dgy: number };
     if (f < TRIP_ARRIVE) {
       const d = (f / TRIP_ARRIVE) * pathLength(there);
       pos = pointAlong(there, d);
@@ -322,7 +295,7 @@ class Engine {
       va.status = 'walking';
       va.moving = true;
     } else if (f < TRIP_LEAVE) {
-      pos = { p: there[there.length - 1], dx: 0, dy: -1 };
+      pos = { p: there[there.length - 1], dgx: 0, dgy: -1 };
       va.status = 'reading';
     } else {
       const d = ((f - TRIP_LEAVE) / (1 - TRIP_LEAVE)) * pathLength(back);
@@ -331,10 +304,9 @@ class Engine {
       va.status = 'walking';
       va.moving = f < 1;
     }
-    va.x = pos.p.x;
-    va.y = pos.p.y;
-    if (va.status === 'reading') va.facing = 'back';
-    else va.facing = faceFor(pos.dx, pos.dy);
+    va.gx = pos.p.gx;
+    va.gy = pos.p.gy;
+    va.facing = va.status === 'reading' ? 'ne' : faceFor(pos.dgx, pos.dgy);
   }
 
   // ─── Effects ─────────────────────────────────────────────────────────────
@@ -345,8 +317,10 @@ class Engine {
     const d = DESKS[va.desk] ?? DESKS[0];
     const agent = s.agents.find((a) => a.id === va.id);
     const provider = s.models.find((m) => m.id === agent?.modelId)?.provider;
+    // Off the top of the laptop lid.
+    const p = toScreen(d.gx + 1.25, d.gy + 0.2, DESK_H + 13);
     this.particles.push({
-      x: d.x + 6 + Math.random() * 10, y: d.y - 32, vx: (Math.random() - 0.5) * 4, vy: -10 - Math.random() * 6, g: 0,
+      x: p.x - 5 + Math.random() * 10, y: p.y, vx: (Math.random() - 0.5) * 4, vy: -10 - Math.random() * 6, g: 0,
       life: 1.2, max: 1.2, color: provider ? PROVIDERS[provider].color : '#9a8aff',
     });
   }
@@ -364,7 +338,7 @@ class Engine {
     const va = this.agents.get(agentId);
     if (!va) return null;
     const d = DESKS[va.desk] ?? DESKS[0];
-    return { x: d.x + 10, y: d.y - 30 };
+    return toScreen(d.gx + 1.2, d.gy + 0.6, DESK_H + 4);
   }
 
   /** Paper flies desk → desk; to or from another person's office it goes through the door. */
@@ -372,8 +346,8 @@ class Engine {
     const a = this.deskPoint(from);
     const b = this.deskPoint(to);
     if (!a && !b) return;
-    const start = a ?? DOOR;
-    const end = b ?? DOOR;
+    const start = a ?? DOOR_POINT;
+    const end = b ?? DOOR_POINT;
     this.flyers.push({ x0: start.x, y0: start.y, x1: end.x, y1: end.y, t: 0, dur: 1.3 });
     play('paper');
     if (b) setTimeout(() => this.say(to, '!', 1), 1300);

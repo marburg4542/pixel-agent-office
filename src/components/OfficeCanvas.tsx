@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { MAX_DESKS, useStore, useT } from '../store';
 import { MAX_ROOMS } from '../../shared/constants';
 import { engine } from '../sim/engine';
-import { SCENE_H, SCENE_W } from '../scene/layout';
-import { renderBackground } from '../scene/office';
-import { hitTest, renderScene, type HoverTarget } from '../scene/render';
+import { ISO_H as SCENE_H, ISO_W as SCENE_W } from '../scene/iso/geom';
+import { renderIsoBackground } from '../scene/iso/room';
+import { isoHitTest as hitTest, renderIsoScene as renderScene, type HoverTarget } from '../scene/iso/render';
 import { ModelLabel, RoleLabel, useTicker } from './ui';
 
 /** Narrow and upright: the office sits above the inbox (landscape phones get the laptop layout). */
@@ -18,7 +18,7 @@ export function OfficeCanvas() {
   const [tip, setTip] = useState<{ target: HoverTarget; x: number; y: number } | null>(null);
   const openModal = useStore((s) => s.openModal);
   const theme = useStore((s) => s.settings.officeTheme);
-  const bg = useMemo(() => renderBackground(theme), [theme]);
+  const bg = useMemo(() => renderIsoBackground(theme), [theme]);
 
   // Integer device-pixel scale keeps every art pixel crisp.
   useEffect(() => {
@@ -35,8 +35,8 @@ export function OfficeCanvas() {
       const best = Math.min((w * dpr) / SCENE_W, (h * dpr) / SCENE_H);
       // Whole-number scales keep pixels perfectly crisp; on small screens where that would waste
       // lots of space, fill the space instead (pixels become a hair uneven, which is hard to see).
-      let s = Math.max(1, Math.floor(best));
-      if (s < best * 0.8) s = Math.max(0.5, best);
+      let s = Math.floor(best);
+      if (s < 1 || s < best * 0.8) s = Math.max(0.25, best);
       canvas.width = Math.round(SCENE_W * s);
       canvas.height = Math.round(SCENE_H * s);
       canvas.style.width = `${(SCENE_W * s) / dpr}px`;

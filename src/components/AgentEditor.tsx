@@ -88,7 +88,7 @@ export function AgentEditor({ z, onClose, agentId, desk, room }: { z: number; on
       <div className="creator">
         <div>
           <div className="preview-box">
-            <SpritePreview look={look} view={view} anim={anim} scale={9} />
+            <SpritePreview look={look} view={view} anim={anim} scale={7} />
           </div>
           <div className="preview-controls">
             <span className="seg">

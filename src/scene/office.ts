@@ -1,4 +1,4 @@
-import { BOARD, CLOCK, LEFT_WINDOW, NOTES_AREA, RIGHT_WINDOW, SCENE_H, SCENE_W, TV, WALL_H, type DeskPos } from './layout';
+import type { Pt, Rect } from './layout';
 import { mix, shade, tint } from '../sprites/color';
 
 export const FONT = '"Pixelify Sans", "Chakra Petch", sans-serif';
@@ -46,7 +46,7 @@ export function fitText(ctx: Ctx, str: string, maxW: number, size: number): stri
   return s + '…';
 }
 
-// ─── Static background (walls, floor, frames) ───────────────────────────────
+// ─── Wall pieces (drawn flat; the isometric walls shear them into place) ──────
 
 /** Deterministic pseudo-random so the floor looks the same every load. */
 function prng(seed: number) {
@@ -63,21 +63,19 @@ export type OfficeTheme = 'wood' | 'modern';
 const PALETTES = {
   wood: {
     wall: '#efe0c0', wallStripe: '#ecdbb8', wainscot: '#c9a878', wainscotTop: '#a8845a', panel: '#bf9d6c', panelTop: '#b08e5e', panelBottom: '#d6b98c', baseboard: '#6b4a32',
-    floorA: '#b27e4d', floorB: '#ba8756', floorHi: '#c99464', floorLo: '#8f5e36', floorKnot: '#a87446', tiles: false,
     frameDark: '#6b4a32', frame: '#8a6242', sillShadow: '#5a3a24',
     boardFrame: '#5a3a24', boardInner: '#7a5236', boardSurface: '#c8955a', boardSpeck: ['#b8834a', '#d6a56c'],
     clock: '#5a3a24',
-    deskEdge: '#3a2418', deskTop: '#a06e46', deskTopHi: '#bd8a5c', deskTopLo: '#8a5a38', deskFront: '#7a4e32', deskFrontLo: '#5e3a24',
-    chair: '#b8443c', chairHi: '#d8625a', chairSide: '#d05a52', chairTuft: '#8a2f2a', armrest: '#5a4a52',
+    deskEdge: '#3a2418', deskTop: '#a06e46', deskTopHi: '#bd8a5c', deskFront: '#7a4e32', deskFrontLo: '#5e3a24',
+    chair: '#b8443c', chairHi: '#d8625a',
   },
   modern: {
     wall: '#eef1f4', wallStripe: '#e8ecf0', wainscot: '#cfd6de', wainscotTop: '#aeb7c2', panel: '#c5cdd6', panelTop: '#b3bcc6', panelBottom: '#dde3e9', baseboard: '#6f7a87',
-    floorA: '#d6dbe1', floorB: '#d1d6dd', floorHi: '#e3e7eb', floorLo: '#bcc3cb', floorKnot: '#c8ced5', tiles: true,
     frameDark: '#5d6773', frame: '#8a939e', sillShadow: '#4b5560',
     boardFrame: '#5d6773', boardInner: '#9aa3ad', boardSurface: '#f7f9fb', boardSpeck: ['#eef1f4', '#e6eaee'],
     clock: '#3c4450',
-    deskEdge: '#3c4450', deskTop: '#f1f3f5', deskTopHi: '#ffffff', deskTopLo: '#cdd3d9', deskFront: '#e2e6ea', deskFrontLo: '#9aa3ad',
-    chair: '#2f6f9f', chairHi: '#4a8cc0', chairSide: '#3f81b3', chairTuft: '#24557a', armrest: '#4b5560',
+    deskEdge: '#3c4450', deskTop: '#f1f3f5', deskTopHi: '#ffffff', deskFront: '#e2e6ea', deskFrontLo: '#9aa3ad',
+    chair: '#2f6f9f', chairHi: '#4a8cc0',
   },
 };
 let pal = PALETTES.wood;
@@ -86,58 +84,15 @@ export function setOfficeTheme(theme: OfficeTheme | undefined): void {
   pal = PALETTES[theme ?? 'wood'] ?? PALETTES.wood;
 }
 
-export function renderBackground(theme: OfficeTheme = 'wood'): HTMLCanvasElement {
-  setOfficeTheme(theme);
-  const c = document.createElement('canvas');
-  c.width = SCENE_W;
-  c.height = SCENE_H;
-  const ctx = c.getContext('2d')!;
-  const rnd = prng(7);
+export function drawWindowFrame(ctx: Ctx, w: Rect): void {
+  rect(ctx, w.x - 3, w.y - 3, w.w + 6, w.h + 6, pal.frameDark);
+  rect(ctx, w.x - 2, w.y - 2, w.w + 4, w.h + 4, pal.frame);
+  rect(ctx, w.x - 5, w.y + w.h + 2, w.w + 10, 3, pal.frame);
+  rect(ctx, w.x - 5, w.y + w.h + 5, w.w + 10, 1, pal.sillShadow);
+}
 
-  // Wall
-  rect(ctx, 0, 0, SCENE_W, WALL_H, pal.wall);
-  for (let x = 0; x < SCENE_W; x += 16) rect(ctx, x, 0, 8, 44, pal.wallStripe);
-  // Wainscot
-  rect(ctx, 0, 44, SCENE_W, 18, pal.wainscot);
-  rect(ctx, 0, 44, SCENE_W, 2, pal.wainscotTop);
-  for (let x = 4; x < SCENE_W; x += 28) {
-    rect(ctx, x, 48, 24, 11, pal.panel);
-    rect(ctx, x, 48, 24, 1, pal.panelTop);
-    rect(ctx, x, 58, 24, 1, pal.panelBottom);
-  }
-  rect(ctx, 0, 62, SCENE_W, 2, pal.baseboard);
-
-  // Floor planks
-  const plankH = 7;
-  for (let y = WALL_H, row = 0; y < SCENE_H; y += plankH, row++) {
-    rect(ctx, 0, y, SCENE_W, plankH, row % 2 ? pal.floorA : pal.floorB);
-    rect(ctx, 0, y, SCENE_W, 1, pal.floorHi);
-    rect(ctx, 0, y + plankH - 1, SCENE_W, 1, pal.floorLo);
-    if (pal.tiles) {
-      // Tiles: a regular grid, offset every other row.
-      for (let x = (row % 2) * 7; x < SCENE_W; x += 14) rect(ctx, x, y + 1, 1, plankH - 2, pal.floorLo);
-      continue;
-    }
-    let x = -Math.floor(rnd() * 40);
-    while (x < SCENE_W) {
-      x += 34 + Math.floor(rnd() * 30);
-      rect(ctx, x, y + 1, 1, plankH - 2, pal.floorLo);
-      if (rnd() < 0.3) rect(ctx, x + 6 + Math.floor(rnd() * 14), y + 3, 2, 1, pal.floorKnot);
-    }
-  }
-  // Soft shadow where floor meets wall
-  rect(ctx, 0, WALL_H, SCENE_W, 2, 'rgba(60,30,10,0.18)');
-
-  // Window frames (interiors are drawn live)
-  for (const w of [LEFT_WINDOW, RIGHT_WINDOW]) {
-    rect(ctx, w.x - 3, w.y - 3, w.w + 6, w.h + 6, pal.frameDark);
-    rect(ctx, w.x - 2, w.y - 2, w.w + 4, w.h + 4, pal.frame);
-    rect(ctx, w.x - 5, w.y + w.h + 2, w.w + 10, 3, pal.frame);
-    rect(ctx, w.x - 5, w.y + w.h + 5, w.w + 10, 1, pal.sillShadow);
-  }
-
-  // Board frame & cork
-  const b = BOARD;
+/** Board frame & cork. */
+export function drawBoardFrame(ctx: Ctx, b: Rect, rnd: () => number = prng(7)): void {
   rect(ctx, b.x + 2, b.y + 2, b.w, b.h, 'rgba(60,30,10,0.25)');
   rect(ctx, b.x, b.y, b.w, b.h, pal.boardFrame);
   rect(ctx, b.x + 1, b.y + 1, b.w - 2, b.h - 2, pal.boardInner);
@@ -147,24 +102,25 @@ export function renderBackground(theme: OfficeTheme = 'wood'): HTMLCanvasElement
     const y = b.y + 3 + Math.floor(rnd() * (b.h - 6));
     rect(ctx, x, y, 1, 1, rnd() < 0.5 ? pal.boardSpeck[0] : pal.boardSpeck[1]);
   }
+}
 
-  // Clock body
-  const cx = CLOCK.x;
-  const cy = CLOCK.y;
+export function drawClockFace(ctx: Ctx, c: Pt): void {
   ctx.fillStyle = pal.clock;
   ctx.beginPath();
-  ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+  ctx.arc(c.x, c.y, 9, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = '#fdf6e3';
   ctx.beginPath();
-  ctx.arc(cx, cy, 7.5, 0, Math.PI * 2);
+  ctx.arc(c.x, c.y, 7.5, 0, Math.PI * 2);
   ctx.fill();
   for (let i = 0; i < 12; i++) {
     const a = (i / 12) * Math.PI * 2;
-    rect(ctx, cx + Math.cos(a) * 6 - 0.5, cy + Math.sin(a) * 6 - 0.5, 1, 1, i % 3 === 0 ? INK : '#9a8a7a');
+    rect(ctx, c.x + Math.cos(a) * 6 - 0.5, c.y + Math.sin(a) * 6 - 0.5, 1, 1, i % 3 === 0 ? INK : '#9a8a7a');
   }
-  return c;
 }
+
+/** Colors of the current office theme (for scenes drawn elsewhere, like the isometric room). */
+export const themeColors = () => pal;
 
 // ─── Live wall elements ─────────────────────────────────────────────────────
 
@@ -175,11 +131,11 @@ function skyColors(hour: number): [string, string] {
   return ['#1d2450', '#3a3f7a'];
 }
 
-export function drawWindows(ctx: Ctx, now: Date, t: number): void {
+export function drawWindows(ctx: Ctx, now: Date, t: number, windows: Rect[]): void {
   const hour = now.getHours() + now.getMinutes() / 60;
   const [top, bottom] = skyColors(hour);
   const night = hour < 6 || hour >= 19;
-  for (const [wi, w] of [LEFT_WINDOW, RIGHT_WINDOW].entries()) {
+  for (const [wi, w] of windows.entries()) {
     for (let y = 0; y < w.h; y++) rect(ctx, w.x, w.y + y, w.w, 1, mix(top, bottom, y / w.h));
     ctx.save();
     ctx.beginPath();
@@ -218,9 +174,9 @@ export function drawWindows(ctx: Ctx, now: Date, t: number): void {
   }
 }
 
-export function drawClockHands(ctx: Ctx, now: Date): void {
-  const cx = CLOCK.x;
-  const cy = CLOCK.y;
+export function drawClockHands(ctx: Ctx, now: Date, c: Pt): void {
+  const cx = c.x;
+  const cy = c.y;
   const h = ((now.getHours() % 12) + now.getMinutes() / 60) / 12;
   const m = now.getMinutes() / 60;
   ctx.strokeStyle = INK;
@@ -256,9 +212,8 @@ export interface BoardCard {
 }
 
 export function drawBoard(
-  ctx: Ctx, columns: { id: keyof typeof COLUMN_COLORS; cards: BoardCard[] }[], title: string, hover: boolean, t: number,
+  ctx: Ctx, columns: { id: keyof typeof COLUMN_COLORS; cards: BoardCard[] }[], title: string, hover: boolean, t: number, b: Rect,
 ): void {
-  const b = BOARD;
   const colW = 22;
   const gap = 2;
   const x0 = b.x + 5;
@@ -290,8 +245,7 @@ export function drawBoard(
   }
 }
 
-export function drawWallNotes(ctx: Ctx, notes: { color: string; unread: boolean }[], t: number): void {
-  const a = NOTES_AREA;
+export function drawWallNotes(ctx: Ctx, notes: { color: string; unread: boolean }[], t: number, a: Rect): void {
   notes.slice(0, 12).forEach((n, i) => {
     const x = a.x + (i % 3) * 11;
     const y = a.y + Math.floor(i / 3) * 10;
@@ -309,8 +263,8 @@ export function drawWallNotes(ctx: Ctx, notes: { color: string; unread: boolean 
  * Newsroom TV: the latest watchlist's sentiment trend with a scrolling ticker; a blinking LIVE dot
  * while an agent is doing a run.
  */
-export function drawTv(ctx: Ctx, t: number, o: { trend: number[]; live: boolean; hover: boolean }): void {
-  const { x, y, w, h } = TV;
+export function drawTv(ctx: Ctx, t: number, o: { trend: number[]; live: boolean; hover: boolean }, r: Rect): void {
+  const { x, y, w, h } = r;
   rect(ctx, x + 2, y + 2, w, h, 'rgba(60,30,10,0.25)');
   rect(ctx, x, y, w, h, o.hover ? '#4a4366' : INK);
   const sx = x + 2;
@@ -341,143 +295,6 @@ export function drawTv(ctx: Ctx, t: number, o: { trend: number[]; live: boolean;
   if (o.live && Math.floor(t * 2) % 2 === 0) rect(ctx, sx + sw - 4, sy + 1, 3, 3, '#ff4d4d');
   // Stand-by light & bezel
   rect(ctx, x + w - 5, y + h - 3, 2, 1, o.live ? '#ff4d4d' : '#5ec27a');
-}
-
-// ─── Furniture ──────────────────────────────────────────────────────────────
-
-export function drawChair(ctx: Ctx, x: number, y: number): void {
-  // Only the top of the chair shows above the desk: a rounded tufted backrest plus armrests.
-  const line = '#2a1e2e';
-  rect(ctx, x - 5, y - 22, 11, 1, line);
-  rect(ctx, x - 7, y - 21, 15, 15, line);
-  rect(ctx, x - 6, y - 21, 13, 15, pal.chair);
-  rect(ctx, x - 5, y - 21, 11, 1, pal.chairHi);
-  rect(ctx, x - 6, y - 20, 1, 14, pal.chairSide);
-  rect(ctx, x - 1, y - 18, 1, 1, pal.chairTuft);
-  rect(ctx, x + 1, y - 18, 1, 1, pal.chairTuft);
-  rect(ctx, x - 1, y - 14, 1, 1, pal.chairTuft);
-  rect(ctx, x + 1, y - 14, 1, 1, pal.chairTuft);
-  // armrests
-  rect(ctx, x - 11, y - 10, 5, 4, line);
-  rect(ctx, x - 10, y - 9, 4, 2, pal.armrest);
-  rect(ctx, x + 6, y - 10, 5, 4, line);
-  rect(ctx, x + 6, y - 9, 4, 2, pal.armrest);
-}
-
-export interface DeskDrawOpts {
-  empty: boolean;
-  name?: string;
-  roleColor?: string;
-  provider?: { color: string; accent: string };
-  working?: boolean;
-  queue?: number;
-  hover?: boolean;
-  /** 0…1 how dark it is — lamps glow at night. */
-  night?: number;
-  t: number;
-}
-
-export function drawDesk(ctx: Ctx, d: DeskPos, o: DeskDrawOpts): void {
-  const { x, y } = d;
-  // floor shadow
-  rect(ctx, x - 23, y, 46, 2, 'rgba(60,30,10,0.22)');
-  // legs
-  rect(ctx, x - 23, y - 3, 3, 3, pal.deskEdge);
-  rect(ctx, x + 20, y - 3, 3, 3, pal.deskEdge);
-  // top surface
-  rect(ctx, x - 25, y - 23, 50, 21, pal.deskEdge);
-  rect(ctx, x - 24, y - 22, 48, 8, pal.deskTop);
-  rect(ctx, x - 24, y - 22, 48, 1, pal.deskTopHi);
-  rect(ctx, x - 24, y - 15, 48, 1, pal.deskTopLo);
-  // front panel
-  rect(ctx, x - 24, y - 14, 48, 11, pal.deskFront);
-  rect(ctx, x - 24, y - 4, 48, 1, pal.deskFrontLo);
-
-  if (!o.empty) {
-    // nameplate
-    box(ctx, x - 16, y - 12, 32, 8, '#f4e9d0', '#3a2418');
-    rect(ctx, x - 15, y - 11, 2, 6, o.roleColor ?? '#8a8aa0');
-    if (o.name) text(ctx, fitText(ctx, o.name, 26, 5), x + 1, y - 7.8, { size: 5, color: '#3a2418', weight: 600 });
-
-    // mug
-    rect(ctx, x - 21, y - 27, 5, 5, '#3a2418');
-    rect(ctx, x - 20, y - 26, 3, 4, '#f4f1ea');
-    rect(ctx, x - 20, y - 26, 3, 1, '#6b3e26');
-    rect(ctx, x - 16, y - 25, 1, 2, '#3a2418');
-    if (o.working && Math.floor(o.t * 2) % 2 === 0) rect(ctx, x - 19, y - 30, 1, 2, 'rgba(255,255,255,0.7)');
-
-    // desk lamp (on at night while someone is at the desk)
-    const lampOn = (o.night ?? 0) > 0.2;
-    rect(ctx, x - 13, y - 24, 5, 2, '#3a2418');
-    rect(ctx, x - 11, y - 31, 1, 7, '#3a2418');
-    rect(ctx, x - 14, y - 34, 6, 3, '#3a2418');
-    rect(ctx, x - 13, y - 33, 4, 1, lampOn ? '#ffd27a' : '#6e8c5a');
-    if (lampOn) rect(ctx, x - 12, y - 31, 2, 1, '#fff2b8');
-
-    // paper stack = queued work
-    const q = Math.min(o.queue ?? 0, 5);
-    for (let i = 0; i < q; i++) {
-      rect(ctx, x + 18, y - 23 - i * 2, 6, 2, '#3a2418');
-      rect(ctx, x + 18, y - 23 - i * 2, 5, 1, i % 2 ? '#ffffff' : '#ece4d0');
-    }
-
-    // laptop (back of the lid faces us; logo = provider)
-    const lx = x + 3;
-    const ly = y - 31;
-    rect(ctx, lx - 1, y - 23, 17, 2, '#6d7080');
-    rect(ctx, lx, ly, 15, 10, '#3a3d4a');
-    rect(ctx, lx + 1, ly + 1, 13, 8, '#c9ccd6');
-    rect(ctx, lx + 1, ly + 1, 13, 1, '#e0e2ea');
-    const p = o.provider ?? { color: '#8a8aa0', accent: '#fff' };
-    const lit = o.working ? (Math.sin(o.t * 5) > -0.3 ? p.color : tint(p.color, 0.3)) : shade(p.color, 0.25);
-    rect(ctx, lx + 5, ly + 3, 5, 4, lit);
-    rect(ctx, lx + 6, ly + 4, 3, 2, o.working ? p.accent : shade(p.accent, 0.3));
-  } else if (o.hover) {
-    ctx.strokeStyle = '#ffe066';
-    ctx.setLineDash([2, 2]);
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x - 26.5, y - 42.5, 53, 44);
-    ctx.setLineDash([]);
-    text(ctx, '+', x, y - 30, { size: 14, color: '#ffe066', outline: INK, weight: 700 });
-  }
-}
-
-export function drawPlant(ctx: Ctx, x: number, y: number, big: boolean): void {
-  const potW = big ? 12 : 9;
-  rect(ctx, x - potW / 2 - 1, y - 9, potW + 2, 9, '#5a3a24');
-  rect(ctx, x - potW / 2, y - 8, potW, 7, '#c0643c');
-  rect(ctx, x - potW / 2, y - 8, potW, 2, '#d8784e');
-  const leaf = ['#3f9a52', '#4fbf7a', '#2f7a40'];
-  const h = big ? 20 : 12;
-  for (let i = 0; i < 7; i++) {
-    const lx = x - 6 + ((i * 5) % 12);
-    const ly = y - 10 - ((i * 7) % h);
-    rect(ctx, lx, ly, 4, 3, leaf[i % 3]);
-  }
-  rect(ctx, x - 1, y - 10 - h / 2, 2, h / 2, '#2f7a40');
-}
-
-export function drawWaterCooler(ctx: Ctx, x: number, y: number, t: number): void {
-  rect(ctx, x - 6, y - 16, 12, 16, '#3a3d4a');
-  rect(ctx, x - 5, y - 15, 10, 14, '#dfe3ec');
-  rect(ctx, x - 4, y - 28, 8, 12, '#2a2d40');
-  rect(ctx, x - 3, y - 27, 6, 10, '#8fd0f4');
-  rect(ctx, x - 3, y - 27, 2, 10, '#b8e4fa');
-  if (Math.floor(t) % 6 === 0) rect(ctx, x, y - 22 + ((t * 8) % 5), 1, 1, '#ffffff');
-  rect(ctx, x - 2, y - 11, 4, 2, '#4f7cf0');
-}
-
-export function drawCabinet(ctx: Ctx, x: number, y: number): void {
-  rect(ctx, x - 10, y - 18, 20, 18, '#3a2418');
-  rect(ctx, x - 9, y - 17, 18, 16, '#8a6242');
-  rect(ctx, x - 9, y - 9, 18, 1, '#5a3a24');
-  rect(ctx, x - 2, y - 14, 4, 1, '#d8c8a8');
-  rect(ctx, x - 2, y - 6, 4, 1, '#d8c8a8');
-  // printer on top
-  rect(ctx, x - 8, y - 25, 16, 7, '#3a3d4a');
-  rect(ctx, x - 7, y - 24, 14, 5, '#c9ccd6');
-  rect(ctx, x - 5, y - 27, 10, 2, '#f4f1ea');
-  rect(ctx, x + 4, y - 22, 2, 1, '#4fbf7a');
 }
 
 // ─── Overlays ───────────────────────────────────────────────────────────────
@@ -522,9 +339,6 @@ export function drawPaper(ctx: Ctx, x: number, y: number): void {
   rect(ctx, x - 1, y, 3, 1, '#9a8a7a');
 }
 
-/** Where each lamp's light comes from (for the night overlay). */
-export const lampLight = (d: DeskPos) => ({ x: d.x - 11, y: d.y - 28 });
-
 export type EmoteKind = 'heart' | 'sweat' | 'question' | 'anger' | 'cup' | 'note' | 'drop';
 
 const EMOTES: Record<EmoteKind, { rows: string[]; pal: Record<string, string> }> = {
@@ -555,16 +369,16 @@ export function drawEmote(ctx: Ctx, x: number, y: number, kind: EmoteKind): void
  * Drawn through a reusable offscreen canvas so the lights cut holes in the darkness.
  */
 let darkness: HTMLCanvasElement | null = null;
-export function drawNight(ctx: Ctx, level: number, lights: { x: number; y: number; r: number }[]): void {
+export function drawNight(ctx: Ctx, level: number, lights: { x: number; y: number; r: number }[], w: number, h: number): void {
   if (level <= 0) return;
   darkness ??= document.createElement('canvas');
-  darkness.width = SCENE_W;
-  darkness.height = SCENE_H;
+  if (darkness.width !== w) darkness.width = w;
+  if (darkness.height !== h) darkness.height = h;
   const d = darkness.getContext('2d')!;
   d.globalCompositeOperation = 'source-over';
-  d.clearRect(0, 0, SCENE_W, SCENE_H);
+  d.clearRect(0, 0, w, h);
   d.fillStyle = `rgba(14, 18, 48, ${0.55 * level})`;
-  d.fillRect(0, 0, SCENE_W, SCENE_H);
+  d.fillRect(0, 0, w, h);
   d.globalCompositeOperation = 'destination-out';
   for (const l of lights) {
     const g = d.createRadialGradient(l.x, l.y, 2, l.x, l.y, l.r);

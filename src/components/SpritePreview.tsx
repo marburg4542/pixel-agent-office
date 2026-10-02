@@ -4,8 +4,8 @@ import { getSprite, SPR_H, SPR_W, type View } from '../sprites/character';
 
 export type PreviewAnim = 'idle' | 'work' | 'walk';
 
-/** Animated, scaled-up character for the creator and agent profile. */
-export function SpritePreview({ look, view = 'front', anim = 'idle', scale = 8 }: { look: Look; view?: View; anim?: PreviewAnim; scale?: number }) {
+/** Animated, scaled-up character for the creator, the agent profile and the sign-in greeter. */
+export function SpritePreview({ look, view = 'front', anim = 'idle', scale = 6 }: { look: Look; view?: View; anim?: PreviewAnim; scale?: number }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const w = SPR_W * scale;
   const h = (SPR_H + 1) * scale;
@@ -20,8 +20,8 @@ export function SpritePreview({ look, view = 'front', anim = 'idle', scale = 8 }
       const step = Math.floor(t * 6) % 2;
       const spr = getSprite(look, {
         view,
-        legs: anim === 'walk' ? (step ? 'walk1' : 'walk2') : 'stand',
-        arms: anim === 'work' && view === 'front' ? (Math.floor(t * 7) % 2 ? 'typeL' : 'typeR') : 'rest',
+        pose: anim === 'walk' ? (step ? 'walk1' : 'walk2') : 'stand',
+        arms: anim === 'work' && view !== 'back' ? (Math.floor(t * 7) % 2 ? 'typeL' : 'typeR') : 'rest',
         blink: t % 3.2 < 0.14,
       });
       const bob = anim === 'walk' ? -step : anim === 'idle' ? Math.floor(t * 1.1) % 2 : 0;
