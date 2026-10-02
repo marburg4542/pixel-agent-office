@@ -2,7 +2,7 @@
 // positions and animation for the canvas. All decisions happen on the server — nothing here
 // changes data.
 import { runtimeValue, useStore } from '../store';
-import { BOARD_SLOTS, DESKS, DESK_H, DOOR_POINT, SPOTS, faceFor, pathLength, pointAlong, route, seatOf, type Facing, type GPt } from '../scene/iso/layout';
+import { BOARD_SLOTS, DESKS, DESK_H, DOOR_POINT, SEAT_U, SPOTS, deskCenter, deskPoint, faceFor, pathLength, pointAlong, route, seatOf, type Facing, type GPt } from '../scene/iso/layout';
 import { toScreen, type Pt } from '../scene/iso/geom';
 import type { EmoteKind } from '../scene/office';
 import { TRIP_ARRIVE, TRIP_LEAVE } from '../../shared/constants';
@@ -189,7 +189,7 @@ class Engine {
         if (va.status === 'walking' || va.status === 'reading') va.slot = null;
         va.gx = seat.gx;
         va.gy = seat.gy;
-        va.facing = 'sw';
+        va.facing = (DESKS[va.desk] ?? DESKS[0]).facing;
         va.seated = true;
         if (rt?.status === 'working') {
           va.status = 'working';
@@ -217,7 +217,7 @@ class Engine {
       if (!va) {
         const seat = seatOf(DESKS[a.desk] ?? DESKS[0]);
         this.agents.set(a.id, {
-          id: a.id, desk: a.desk, gx: seat.gx, gy: seat.gy, facing: 'sw', seated: true, moving: false, walkDist: 0, typeT: 0, status: 'idle', bubble: null,
+          id: a.id, desk: a.desk, gx: seat.gx, gy: seat.gy, facing: (DESKS[a.desk] ?? DESKS[0]).facing, seated: true, moving: false, walkDist: 0, typeT: 0, status: 'idle', bubble: null,
           blinkT: 1 + Math.random() * 3, blinking: false, idleSince: this.realTime, slot: null, progress: 0, emote: null, wander: null,
         });
       } else if (va.desk !== a.desk) {
@@ -318,7 +318,8 @@ class Engine {
     const agent = s.agents.find((a) => a.id === va.id);
     const provider = s.models.find((m) => m.id === agent?.modelId)?.provider;
     // Off the top of the laptop lid.
-    const p = toScreen(d.gx + 1.25, d.gy + 0.2, DESK_H + 13);
+    const lid = deskPoint(d, SEAT_U, 0.55);
+    const p = toScreen(lid.gx, lid.gy, DESK_H + 13);
     this.particles.push({
       x: p.x - 5 + Math.random() * 10, y: p.y, vx: (Math.random() - 0.5) * 4, vy: -10 - Math.random() * 6, g: 0,
       life: 1.2, max: 1.2, color: provider ? PROVIDERS[provider].color : '#9a8aff',
@@ -337,8 +338,8 @@ class Engine {
   private deskPoint(agentId: string): Pt | null {
     const va = this.agents.get(agentId);
     if (!va) return null;
-    const d = DESKS[va.desk] ?? DESKS[0];
-    return toScreen(d.gx + 1.2, d.gy + 0.6, DESK_H + 4);
+    const c = deskCenter(DESKS[va.desk] ?? DESKS[0]);
+    return toScreen(c.gx, c.gy, DESK_H + 4);
   }
 
   /** Paper flies desk → desk; to or from another person's office it goes through the door. */

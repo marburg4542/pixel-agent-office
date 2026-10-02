@@ -14,10 +14,10 @@ import {
 import { ISO_H, ISO_W, RIGHT_WALL, WALL_H, screenToWall, toGrid, toScreen, wallToScreen, type Pt } from './geom';
 import { floorShadow } from './pixels';
 import { LEFT_DECOR, RIGHT_DECOR, drawIsoWalls, renderIsoBackground } from './room';
-import { DESKS, DESK_D, DESK_H, DESK_W, seatOf } from './layout';
+import { DESKS, DESK_D, DESK_H, DESK_W, deskBox, seatOf, type IsoDesk } from './layout';
 import {
-  drawIsoBookshelf, drawIsoBoxes, drawIsoCabinet, drawIsoChair, drawIsoCoffee, drawIsoCooler, drawIsoDesk, drawIsoHireHint, drawIsoNameTag,
-  drawIsoPlant, isoLampLight,
+  chairBackKey, deskKey, drawIsoBookshelf, drawIsoBoxes, drawIsoCabinet, drawIsoChairBack, drawIsoChairSeat, drawIsoCoffee, drawIsoCooler, drawIsoDesk,
+  drawIsoHireHint, drawIsoNameTag, drawIsoPlant, isoLampLight,
 } from './furniture';
 
 export type HoverTarget =
@@ -114,10 +114,9 @@ export function renderIsoScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElem
     const a = byDesk.get(d.index);
     const va = a && engine.agents.get(a.id);
     const model = a && s.models.find((m) => m.id === a.modelId);
-    const seat = seatOf(d);
-    items.push({ k: seat.gx + seat.gy - 0.05, draw: () => drawIsoChair(ctx, seat.gx, seat.gy, pal.chair, pal.chairHi) });
+    items.push(...chairItems(ctx, d, pal));
     items.push({
-      k: d.gx + DESK_W / 2 + d.gy + DESK_D / 2,
+      k: deskKey(d),
       draw: () => {
         drawIsoDesk(ctx, d, {
           empty: !a,
@@ -192,6 +191,15 @@ export function renderIsoScene(ctx: CanvasRenderingContext2D, bg: HTMLCanvasElem
   }
 }
 
+/** A desk's chair as two pieces — seat under the sitter, backrest behind them — each sorted on its own. */
+function chairItems(ctx: CanvasRenderingContext2D, d: IsoDesk, pal: { chair: string; chairHi: string }): { k: number; draw: () => void }[] {
+  const seat = seatOf(d);
+  return [
+    { k: seat.gx + seat.gy - 0.02, draw: () => drawIsoChairSeat(ctx, seat, d.facing, pal.chair, pal.chairHi) },
+    { k: chairBackKey(seat, d.facing), draw: () => drawIsoChairBack(ctx, seat, d.facing, pal.chair, pal.chairHi) },
+  ];
+}
+
 /** The room's fixed furniture, with depth keys (gx + gy of each piece's middle). */
 function furniture(ctx: CanvasRenderingContext2D, t: number): { k: number; draw: () => void }[] {
   return [
@@ -224,9 +232,8 @@ export function renderIsoEmptyRoom(ctx: CanvasRenderingContext2D, title: string)
   const pal = themeColors();
   const items: { k: number; draw: () => void }[] = furniture(ctx, 0);
   for (const d of DESKS) {
-    const seat = seatOf(d);
-    items.push({ k: seat.gx + seat.gy - 0.05, draw: () => drawIsoChair(ctx, seat.gx, seat.gy, pal.chair, pal.chairHi) });
-    items.push({ k: d.gx + DESK_W / 2 + d.gy + DESK_D / 2, draw: () => drawIsoDesk(ctx, d, { empty: true, t: 0 }) });
+    items.push(...chairItems(ctx, d, pal));
+    items.push({ k: deskKey(d), draw: () => drawIsoDesk(ctx, d, { empty: true, t: 0 }) });
   }
   items.sort((a, b) => a.k - b.k).forEach((i) => i.draw());
 }
@@ -242,12 +249,13 @@ export function isoHitTest(p: Pt, s: State): HoverTarget | null {
     if (Math.abs(p.x - q.x) <= 7 && p.y >= top && p.y <= bottom) return { kind: 'agent', id: va.id };
   }
 
-  const desks = [...DESKS].sort((a, b) => b.gx + b.gy - (a.gx + a.gy));
+  const desks = [...DESKS].sort((a, b) => deskKey(b) - deskKey(a));
   for (const d of desks) {
     // Is the point over the desk (or its chair) at any height up to a seated person's head?
+    const area = deskBox(d, -0.1, DESK_W + 0.1, -0.8, DESK_D);
     for (const z of [0, 5, 10, DESK_H, 22, 30]) {
       const g = toGrid(p.x, p.y + z);
-      if (g.gx >= d.gx - 0.1 && g.gx <= d.gx + DESK_W + 0.1 && g.gy >= d.gy - 0.8 && g.gy <= d.gy + DESK_D) {
+      if (g.gx >= area.gx && g.gx <= area.gx + area.w && g.gy >= area.gy && g.gy <= area.gy + area.d) {
         const a = roomAgents(s).find((x) => x.desk === d.index);
         return a ? { kind: 'agent', id: a.id } : { kind: 'desk', index: d.index };
       }

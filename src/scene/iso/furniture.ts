@@ -1,8 +1,8 @@
 import { rect, text, fitText, themeColors } from '../office';
 import { shade, tint } from '../../sprites/color';
 import { toScreen, type Pt } from './geom';
-import { facePanelGy, fillPoly, floorShadow, isoBox, pxLine } from './pixels';
-import { DESK_D, DESK_H, DESK_W, type IsoDesk } from './layout';
+import { fillPoly, floorShadow, isoBox, pxLine } from './pixels';
+import { DESK_D, DESK_H, DESK_W, SEAT_U, deskBox, deskPoint, type Facing, type GPt, type IsoDesk } from './layout';
 
 type Ctx = CanvasRenderingContext2D;
 const INK = '#2a1e2e';
@@ -17,74 +17,176 @@ export interface IsoDeskOpts {
   t: number;
 }
 
+/** Is a face whose outward normal points this way visible? (We look from +gx, +gy.) */
+const facesViewer = (normal: Facing) => normal === 'sw' || normal === 'se';
+const OPPOSITE: Record<Facing, Facing> = { sw: 'ne', ne: 'sw', se: 'nw', nw: 'se' };
+
+/** An upright panel standing on a desk-local line (u0…u1 at depth v), from z0 to z1. */
+function deskPanel(ctx: Ctx, d: IsoDesk, u0: number, u1: number, v: number, z0: number, z1: number, color: string): void {
+  const a = deskPoint(d, u0, v);
+  const b = deskPoint(d, u1, v);
+  fillPoly(ctx, [toScreen(a.gx, a.gy, z1), toScreen(b.gx, b.gy, z1), toScreen(b.gx, b.gy, z0), toScreen(a.gx, a.gy, z0)], color);
+}
+
+function deskLine(ctx: Ctx, d: IsoDesk, u0: number, u1: number, v: number, z: number, color: string): void {
+  const a = deskPoint(d, u0, v);
+  const b = deskPoint(d, u1, v);
+  pxLine(ctx, toScreen(a.gx, a.gy, z), toScreen(b.gx, b.gy, z), color);
+}
+
+/** A box given in desk-local terms. */
+function deskIsoBox(ctx: Ctx, d: IsoDesk, u0: number, u1: number, v0: number, v1: number, h: number, c: Parameters<typeof isoBox>[6], z = 0): void {
+  const b = deskBox(d, u0, u1, v0, v1);
+  isoBox(ctx, b.gx, b.gy, b.w, b.d, h, c, z);
+}
+
+/** Depth key of a desk-local point (larger = nearer the viewer). */
+const keyOf = (d: IsoDesk, u: number, v: number) => {
+  const p = deskPoint(d, u, v);
+  return p.gx + p.gy;
+};
+
+/**
+ * A desk, drawn for whichever way its sitter faces: drawers and the keyboard on the sitter's side,
+ * a modesty panel along the far edge, the laptop's screen toward the sitter (so from the far side
+ * you see the back of the lid with the provider's logo).
+ */
 export function drawIsoDesk(ctx: Ctx, d: IsoDesk, o: IsoDeskOpts): void {
   const pal = themeColors();
-  const { gx, gy } = d;
-  floorShadow(ctx, gx + DESK_W / 2 + 0.2, gy + DESK_D / 2 + 0.25, 30, 0.12);
-  // Modesty panel and legs under the top
-  isoBox(ctx, gx + 0.08, gy + 0.55, DESK_W - 0.95, 0.12, DESK_H - 3, { top: pal.deskFrontLo, left: pal.deskFront, right: pal.deskFrontLo });
-  isoBox(ctx, gx + 0.05, gy + 0.08, 0.12, DESK_D - 0.16, DESK_H - 3, { top: pal.deskFrontLo, left: pal.deskFront, right: pal.deskFrontLo });
-  // Drawer pedestal on the right
-  const px = gx + DESK_W - 0.85;
-  isoBox(ctx, px, gy + 0.08, 0.78, DESK_D - 0.16, DESK_H - 3, { top: pal.deskFrontLo, left: pal.deskFront, right: shade(pal.deskFront, 0.18), line: pal.deskEdge });
-  for (const z of [4, 8]) {
-    const a = toScreen(px + 0.08, gy + DESK_D - 0.08, z);
-    const b = toScreen(px + 0.7, gy + DESK_D - 0.08, z);
-    pxLine(ctx, a, b, pal.deskFrontLo);
-    const m = toScreen(px + 0.39, gy + DESK_D - 0.08, z + 2);
-    rect(ctx, m.x - 1, m.y, 3, 1, '#e8d8b8');
-  }
-  // Top
-  isoBox(ctx, gx, gy, DESK_W, DESK_D, 3, { top: pal.deskTop, left: pal.deskFront, right: pal.deskFrontLo, line: pal.deskEdge, edge: pal.deskTopHi }, DESK_H - 3);
+  const W = DESK_W;
+  const D = DESK_D;
+  const legH = DESK_H - 3;
+  const c = deskPoint(d, W / 2, D / 2);
+  floorShadow(ctx, c.gx + 0.15, c.gy + 0.15, 30, 0.12);
+  const panel = { top: pal.deskFrontLo, left: pal.deskFront, right: pal.deskFrontLo };
+  const drawersShow = facesViewer(OPPOSITE[d.facing]);
 
+  // Under the top, back to front: modesty panel (far edge), end panel, drawer pedestal (sitter's left).
+  const under: { k: number; draw: () => void }[] = [
+    { k: keyOf(d, (0.9 + W) / 2, D - 0.14), draw: () => deskIsoBox(ctx, d, 0.9, W - 0.08, D - 0.2, D - 0.08, legH, panel) },
+    { k: keyOf(d, W - 0.11, D / 2), draw: () => deskIsoBox(ctx, d, W - 0.17, W - 0.05, 0.08, D - 0.08, legH, panel) },
+    {
+      k: keyOf(d, 0.46, D / 2),
+      draw: () => {
+        deskIsoBox(ctx, d, 0.07, 0.85, 0.08, D - 0.08, legH, { top: pal.deskFrontLo, left: pal.deskFront, right: shade(pal.deskFront, 0.18), line: pal.deskEdge });
+        if (!drawersShow) return;
+        // Drawer fronts face the sitter.
+        for (const z of [4, 8]) {
+          deskLine(ctx, d, 0.12, 0.8, 0.08, z, pal.deskFrontLo);
+          const m = deskPoint(d, 0.46, 0.08);
+          const p = toScreen(m.gx, m.gy, z + 2);
+          rect(ctx, p.x - 1, p.y, 3, 1, '#e8d8b8');
+        }
+      },
+    },
+  ];
+  under.sort((a, b) => a.k - b.k).forEach((i) => i.draw());
+  deskIsoBox(ctx, d, 0, W, 0, D, 3, { top: pal.deskTop, left: pal.deskFront, right: pal.deskFrontLo, line: pal.deskEdge, edge: pal.deskTopHi }, legH);
   if (o.empty) return;
+
   const top = DESK_H;
-  // Papers = queued work
-  const q = Math.min(o.queue ?? 0, 5);
-  const pp = toScreen(gx + 2.05, gy + 0.6, top);
-  for (let i = 0; i < q; i++) {
-    rect(ctx, pp.x - 5, pp.y - 2 - i * 2, 10, 2, INK);
-    rect(ctx, pp.x - 4, pp.y - 2 - i * 2, 8, 1, i % 2 ? '#ffffff' : '#ece4d0');
-  }
-  // Mug
-  const mp = toScreen(gx + 0.35, gy + 0.85, top);
-  rect(ctx, mp.x - 2, mp.y - 6, 5, 6, INK);
-  rect(ctx, mp.x - 1, mp.y - 5, 3, 5, '#f4f1ea');
-  rect(ctx, mp.x - 1, mp.y - 5, 3, 1, '#6b3e26');
-  rect(ctx, mp.x + 3, mp.y - 4, 1, 2, INK);
-  if (o.working && Math.floor(o.t * 2) % 2 === 0) rect(ctx, mp.x, mp.y - 9, 1, 2, 'rgba(255,255,255,0.7)');
-  // Lamp
-  const lampOn = (o.night ?? 0) > 0.2;
-  const lp = toScreen(gx + 0.3, gy + 0.3, top);
-  rect(ctx, lp.x - 3, lp.y - 2, 6, 2, INK);
-  rect(ctx, lp.x - 1, lp.y - 10, 1, 8, INK);
-  rect(ctx, lp.x - 1, lp.y - 11, 6, 1, INK);
-  rect(ctx, lp.x + 2, lp.y - 13, 6, 4, INK);
-  rect(ctx, lp.x + 3, lp.y - 12, 4, 1, lampOn ? '#ffd27a' : '#6e8c5a');
-  if (lampOn) rect(ctx, lp.x + 3, lp.y - 9, 4, 1, '#fff2b8');
-  // Laptop: base on the desk, lid upright with its back (and the provider logo) toward us.
-  const lx = gx + 0.85;
-  const ly = gy + 0.2;
-  isoBox(ctx, lx, ly, 0.8, 0.55, 1, { top: '#8d91a3', left: '#6d7080', right: '#5a5d6b' }, top);
-  const lid = facePanelGy(ctx, lx, ly, 0.8, top + 1, 12, '#3a3d4a');
-  void lid;
-  facePanelGy(ctx, lx + 0.06, ly, 0.68, top + 2, 10, '#c9ccd6');
-  facePanelGy(ctx, lx + 0.06, ly, 0.68, top + 11, 1, '#e0e2ea');
-  const p = o.provider ?? { color: '#8a8aa0', accent: '#ffffff' };
-  const lit = o.working ? (Math.sin(o.t * 5) > -0.3 ? p.color : tint(p.color, 0.3)) : shade(p.color, 0.25);
-  facePanelGy(ctx, lx + 0.26, ly, 0.28, top + 4, 5, lit);
-  facePanelGy(ctx, lx + 0.32, ly, 0.16, top + 5, 3, o.working ? p.accent : shade(p.accent, 0.3));
+  const on: { k: number; draw: () => void }[] = [];
+  // Papers = queued work (on the drawer side)
+  on.push({
+    k: keyOf(d, 0.5, 0.85),
+    draw: () => {
+      const q = Math.min(o.queue ?? 0, 5);
+      const g = deskPoint(d, 0.5, 0.85);
+      const p = toScreen(g.gx, g.gy, top);
+      for (let i = 0; i < q; i++) {
+        rect(ctx, p.x - 5, p.y - 2 - i * 2, 10, 2, INK);
+        rect(ctx, p.x - 4, p.y - 2 - i * 2, 8, 1, i % 2 ? '#ffffff' : '#ece4d0');
+      }
+    },
+  });
+  // Mug, near the sitter
+  on.push({
+    k: keyOf(d, 0.55, 0.3),
+    draw: () => {
+      const g = deskPoint(d, 0.55, 0.3);
+      const p = toScreen(g.gx, g.gy, top);
+      rect(ctx, p.x - 2, p.y - 6, 5, 6, INK);
+      rect(ctx, p.x - 1, p.y - 5, 3, 5, '#f4f1ea');
+      rect(ctx, p.x - 1, p.y - 5, 3, 1, '#6b3e26');
+      rect(ctx, p.x + 3, p.y - 4, 1, 2, INK);
+      if (o.working && Math.floor(o.t * 2) % 2 === 0) rect(ctx, p.x, p.y - 9, 1, 2, 'rgba(255,255,255,0.7)');
+    },
+  });
+  // Lamp, in the far corner
+  on.push({
+    k: keyOf(d, W - 0.3, D - 0.3),
+    draw: () => {
+      const lampOn = (o.night ?? 0) > 0.2;
+      const g = deskPoint(d, W - 0.3, D - 0.3);
+      const p = toScreen(g.gx, g.gy, top);
+      rect(ctx, p.x - 3, p.y - 2, 6, 2, INK);
+      rect(ctx, p.x - 1, p.y - 10, 1, 8, INK);
+      rect(ctx, p.x - 1, p.y - 11, 6, 1, INK);
+      rect(ctx, p.x + 2, p.y - 13, 6, 4, INK);
+      rect(ctx, p.x + 3, p.y - 12, 4, 1, lampOn ? '#ffd27a' : '#6e8c5a');
+      if (lampOn) rect(ctx, p.x + 3, p.y - 9, 4, 1, '#fff2b8');
+    },
+  });
+  // Laptop: keyboard toward the sitter, the lid behind it.
+  const lu0 = SEAT_U - 0.4;
+  const lu1 = SEAT_U + 0.4;
+  const lidV = 0.55;
+  on.push({
+    k: keyOf(d, SEAT_U, 0.32),
+    draw: () => {
+      const p = o.provider ?? { color: '#8a8aa0', accent: '#ffffff' };
+      const screenShows = facesViewer(OPPOSITE[d.facing]);
+      const drawLid = () => {
+        deskPanel(ctx, d, lu0, lu1, lidV, top + 1, top + 13, screenShows ? '#2a2d3a' : '#3a3d4a');
+        if (screenShows) {
+          // The screen, seen from behind the sitter.
+          deskPanel(ctx, d, lu0 + 0.06, lu1 - 0.06, lidV, top + 2, top + 12, o.working ? '#16263a' : '#1c2230');
+          if (o.working) {
+            for (const [i, z] of [top + 10, top + 8, top + 6, top + 4].entries()) {
+              const len = 0.2 + (((Math.floor(o.t * 3) + i * 3) % 5) * 0.08);
+              deskLine(ctx, d, lu0 + 0.1, lu0 + 0.1 + len, lidV, z, i % 2 ? tint(p.color, 0.3) : p.color);
+            }
+          }
+        } else {
+          // The back of the lid, with the provider's logo.
+          deskPanel(ctx, d, lu0 + 0.06, lu1 - 0.06, lidV, top + 2, top + 12, '#4b5063');
+          const lit = o.working ? (Math.sin(o.t * 5) > -0.3 ? p.color : tint(p.color, 0.3)) : shade(p.color, 0.3);
+          deskPanel(ctx, d, SEAT_U - 0.14, SEAT_U + 0.14, lidV, top + 5, top + 10, lit);
+          deskPanel(ctx, d, SEAT_U - 0.07, SEAT_U + 0.07, lidV, top + 6, top + 9, o.working ? p.accent : shade(p.accent, 0.35));
+        }
+      };
+      const drawBase = () => deskIsoBox(ctx, d, lu0, lu1, 0.1, lidV, 1, { top: '#8d91a3', left: '#6d7080', right: '#5a5d6b' }, top);
+      // Whichever is farther from us goes first.
+      if (keyOf(d, SEAT_U, lidV) < keyOf(d, SEAT_U, 0.3)) {
+        drawLid();
+        drawBase();
+      } else {
+        drawBase();
+        drawLid();
+      }
+    },
+  });
+  on.sort((a, b) => a.k - b.k).forEach((i) => i.draw());
 }
+
+/** Depth key of a desk (its middle). */
+export const deskKey = (d: IsoDesk) => {
+  const c = deskPoint(d, DESK_W / 2, DESK_D / 2);
+  return c.gx + c.gy;
+};
 
 /** Screen point of a desk's lamp (night lighting). */
 export const isoLampLight = (d: IsoDesk): Pt => {
-  const p = toScreen(d.gx + 0.3, d.gy + 0.3, DESK_H);
+  const g = deskPoint(d, DESK_W - 0.3, DESK_D - 0.3);
+  const p = toScreen(g.gx, g.gy, DESK_H);
   return { x: p.x + 5, y: p.y - 8 };
 };
 
-/** Name tag on the front of a desk (screen-aligned so it stays readable). */
+/** Name tag on the desk side nearest us (screen-aligned so it stays readable). */
 export function drawIsoNameTag(ctx: Ctx, d: IsoDesk, name: string, roleColor: string): void {
-  const p = toScreen(d.gx + 1.0, d.gy + DESK_D, 6);
+  const b = deskBox(d, 0, DESK_W, 0, DESK_D);
+  const g = b.w >= b.d ? { gx: b.gx + b.w / 2, gy: b.gy + b.d } : { gx: b.gx + b.w, gy: b.gy + b.d / 2 };
+  const p = toScreen(g.gx, g.gy, 6);
   const w = 34;
   const x = Math.round(p.x - w / 2);
   const y = Math.round(p.y - 4);
@@ -95,16 +197,34 @@ export function drawIsoNameTag(ctx: Ctx, d: IsoDesk, name: string, roleColor: st
   text(ctx, fitText(ctx, name, w - 8, 5), x + w / 2 + 2, y + 4.7, { size: 5, color: '#3a2418', weight: 600 });
 }
 
-/** Office chair facing +gy (toward the viewer); the backrest is behind whoever sits in it. */
-export function drawIsoChair(ctx: Ctx, gx: number, gy: number, color: string, colorHi: string): void {
-  floorShadow(ctx, gx, gy, 9, 0.2);
-  const base = toScreen(gx, gy);
+const FORWARD: Record<Facing, GPt> = { sw: { gx: 0, gy: 1 }, se: { gx: 1, gy: 0 }, ne: { gx: 0, gy: -1 }, nw: { gx: -1, gy: 0 } };
+
+/** A chair-local box (side ±s, forward f0…f1 from the seat's centre) as a floor box. */
+function chairBox(seat: GPt, facing: Facing, s: number, f0: number, f1: number) {
+  const F = FORWARD[facing];
+  const S = { gx: F.gy, gy: F.gx }; // across the chair (sign doesn't matter: it's symmetric)
+  const xs = [seat.gx + S.gx * s + F.gx * f0, seat.gx - S.gx * s + F.gx * f1];
+  const ys = [seat.gy + S.gy * s + F.gy * f0, seat.gy - S.gy * s + F.gy * f1];
+  return { gx: Math.min(...xs), gy: Math.min(...ys), w: Math.abs(xs[0] - xs[1]) || 0.001, d: Math.abs(ys[0] - ys[1]) || 0.001 };
+}
+
+/** Where a chair's backrest is (for depth sorting): just behind the seat. */
+export const chairBackKey = (seat: GPt, facing: Facing) => seat.gx + seat.gy - 0.28 * (FORWARD[facing].gx + FORWARD[facing].gy);
+
+/** The seat, pole and base of an office chair (drawn before whoever sits on it). */
+export function drawIsoChairSeat(ctx: Ctx, seat: GPt, facing: Facing, color: string, colorHi: string): void {
+  floorShadow(ctx, seat.gx, seat.gy, 9, 0.2);
+  const base = toScreen(seat.gx, seat.gy);
   rect(ctx, base.x - 6, base.y - 1, 13, 1, INK);
   rect(ctx, base.x - 1, base.y - 8, 2, 7, '#4b4552');
-  isoBox(ctx, gx - 0.3, gy - 0.28, 0.6, 0.56, 3, { top: colorHi, left: color, right: shade(color, 0.2), line: INK }, 8);
-  // Backrest
-  isoBox(ctx, gx - 0.3, gy - 0.4, 0.6, 0.1, 20, { top: colorHi, left: color, right: shade(color, 0.25), line: INK }, 11);
-  facePanelGy(ctx, gx - 0.2, gy - 0.3, 0.4, 15, 12, tint(color, 0.08));
+  const b = chairBox(seat, facing, 0.27, -0.26, 0.24);
+  isoBox(ctx, b.gx, b.gy, b.w, b.d, 3, { top: colorHi, left: color, right: shade(color, 0.2), line: INK }, 8);
+}
+
+/** The backrest, behind the sitter: its top shows above their shoulders. */
+export function drawIsoChairBack(ctx: Ctx, seat: GPt, facing: Facing, color: string, colorHi: string): void {
+  const b = chairBox(seat, facing, 0.24, -0.34, -0.26);
+  isoBox(ctx, b.gx, b.gy, b.w, b.d, 18, { top: colorHi, left: color, right: shade(color, 0.25), line: INK }, 11);
 }
 
 export function drawIsoPlant(ctx: Ctx, gx: number, gy: number, big: boolean): void {
@@ -220,8 +340,10 @@ export function drawIsoBoxes(ctx: Ctx, gx: number, gy: number): void {
 
 /** Outline and a plus over an empty desk being hovered. */
 export function drawIsoHireHint(ctx: Ctx, d: IsoDesk): void {
-  const top = [toScreen(d.gx, d.gy, DESK_H), toScreen(d.gx + DESK_W, d.gy, DESK_H), toScreen(d.gx + DESK_W, d.gy + DESK_D, DESK_H), toScreen(d.gx, d.gy + DESK_D, DESK_H)];
+  const b = deskBox(d, 0, DESK_W, 0, DESK_D);
+  const top = [toScreen(b.gx, b.gy, DESK_H), toScreen(b.gx + b.w, b.gy, DESK_H), toScreen(b.gx + b.w, b.gy + b.d, DESK_H), toScreen(b.gx, b.gy + b.d, DESK_H)];
   for (let i = 0; i < 4; i++) pxLine(ctx, top[i], top[(i + 1) % 4], '#ffe066');
-  const c = toScreen(d.gx + DESK_W / 2, d.gy + DESK_D / 2, DESK_H + 14);
+  const m = deskPoint(d, DESK_W / 2, DESK_D / 2);
+  const c = toScreen(m.gx, m.gy, DESK_H + 14);
   text(ctx, '+', c.x, c.y, { size: 16, color: '#ffe066', outline: INK, weight: 700 });
 }

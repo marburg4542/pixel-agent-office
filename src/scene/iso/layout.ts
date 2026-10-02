@@ -10,23 +10,57 @@ export interface GPt {
 /** Which way someone faces: toward +gy (down-left on screen), +gx (down-right), −gy (up-right), −gx (up-left). */
 export type Facing = 'sw' | 'se' | 'ne' | 'nw';
 
-/** A workstation: the desk's long side runs along gx; whoever works there sits behind it (smaller gy). */
+/**
+ * A workstation. (gx, gy) is the footprint's corner nearest the back of the room; `facing` is the way
+ * the person working there looks (across the desk, toward its far edge).
+ */
 export interface IsoDesk {
   index: number;
   row: number;
   gx: number;
   gy: number;
+  facing: Facing;
 }
+/** Length, depth and height of a desk, in its own terms (length runs along the sitter's side). */
 export const DESK_W = 2.5;
 export const DESK_D = 1.25;
 export const DESK_H = 15;
 
 const ROWS = [4.0, 9.0];
 const COLS = [1.6, 5.8, 10.0, 14.2];
-export const DESKS: IsoDesk[] = ROWS.flatMap((gy, row) => COLS.map((gx, col) => ({ index: row * COLS.length + col, row, gx, gy })));
+export const DESKS: IsoDesk[] = ROWS.flatMap((gy, row) => COLS.map((gx, col) => ({ index: row * COLS.length + col, row, gx, gy, facing: 'sw' as Facing })));
 
-/** Where the person at a desk sits (their feet, under the chair). */
-export const seatOf = (d: IsoDesk): GPt => ({ gx: d.gx + 1.05, gy: d.gy - 0.32 });
+/** Footprint on the floor: the long side lies across the way the sitter faces. */
+export const deskSize = (f: Facing) => (f === 'sw' || f === 'ne' ? { w: DESK_W, d: DESK_D } : { w: DESK_D, d: DESK_W });
+
+/**
+ * Desk-local point → floor. u runs along the sitter's edge (0…DESK_W, from the sitter's left),
+ * v runs from the sitter's edge toward the far edge (0…DESK_D; negative = behind the sitter's edge).
+ */
+export function deskPoint(d: IsoDesk, u: number, v: number): GPt {
+  const { w, d: dd } = deskSize(d.facing);
+  switch (d.facing) {
+    case 'sw': return { gx: d.gx + w - u, gy: d.gy + v };
+    case 'ne': return { gx: d.gx + u, gy: d.gy + dd - v };
+    case 'se': return { gx: d.gx + v, gy: d.gy + u };
+    case 'nw': return { gx: d.gx + w - v, gy: d.gy + dd - u };
+  }
+}
+
+/** A desk-local box (u0…u1 × v0…v1) as a floor box. */
+export function deskBox(d: IsoDesk, u0: number, u1: number, v0: number, v1: number): { gx: number; gy: number; w: number; d: number } {
+  const a = deskPoint(d, u0, v0);
+  const b = deskPoint(d, u1, v1);
+  return { gx: Math.min(a.gx, b.gx), gy: Math.min(a.gy, b.gy), w: Math.abs(a.gx - b.gx), d: Math.abs(a.gy - b.gy) };
+}
+
+/** Floor middle of a desk. */
+export const deskCenter = (d: IsoDesk): GPt => deskPoint(d, DESK_W / 2, DESK_D / 2);
+
+/** Along the desk: drawers at u 0.07–0.85, knee space beyond, the sitter centred in it. */
+export const SEAT_U = 1.55;
+/** Where the person at a desk sits (their feet, under the chair): in front of the knee space. */
+export const seatOf = (d: IsoDesk): GPt => deskPoint(d, SEAT_U, -0.3);
 
 /** Walkways: three aisles along gx and corridors along gy between the desk columns. */
 const AISLE_BACK = 2.45;
