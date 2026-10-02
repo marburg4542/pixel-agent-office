@@ -205,8 +205,6 @@ const en: Dict = {
   downloadAll: 'Download all results',
   moveTo: 'Move to',
   quickAdd: 'Quick add — type a title, press Enter',
-  boardExpand: 'Full screen',
-  boardDock: 'Dock to side',
   clickToAddStep: 'click an agent to add a step:',
   templates: 'Templates',
   tplMissing: 'No agent with the role: {roles} — hire one or add a step by hand.',
@@ -643,6 +641,9 @@ const en: Dict = {
   ais_ctx: 'Context',
   ais_ctxHint: 'How much text the model reads at once. Longer fits long briefs and research data but needs more memory (on a 4 GB GPU, 8K–16K is a good range).',
   keys_aiMoved: 'Keys for AI models (Claude, GPT, Gemini, OpenRouter, Ollama) are in AI settings.',
+
+  rotate_title: 'Turn your device sideways',
+  rotate_body: 'Pixel Agent Office works in landscape — rotate your phone or tablet to carry on.',
 };
 
 const th: Dict = {
@@ -846,8 +847,6 @@ const th: Dict = {
   downloadAll: 'ดาวน์โหลดผลลัพธ์ทั้งหมด',
   moveTo: 'ย้ายไป',
   quickAdd: 'เพิ่มด่วน — พิมพ์ชื่องานแล้วกด Enter',
-  boardExpand: 'เต็มจอ',
-  boardDock: 'ย่อไว้ข้างจอ',
   clickToAddStep: 'คลิกเอเจนต์เพื่อเพิ่มขั้นตอน:',
   templates: 'แม่แบบ',
   tplMissing: 'ยังไม่มีเอเจนต์หน้าที่: {roles} — จ้างเพิ่ม หรือเพิ่มขั้นตอนเอง',
@@ -1284,6 +1283,9 @@ const th: Dict = {
   ais_ctx: 'Context',
   ais_ctxHint: 'ความยาวข้อความที่โมเดลอ่านได้ในครั้งเดียว ยิ่งยาวยิ่งรับบรีฟยาวและข้อมูลค้นคว้าได้มาก แต่ใช้หน่วยความจำมากขึ้น (การ์ดจอ 4 GB แนะนำ 8K–16K)',
   keys_aiMoved: 'คีย์ของโมเดล AI (Claude, GPT, Gemini, OpenRouter, Ollama) อยู่ที่หน้า ตั้งค่า AI',
+
+  rotate_title: 'หมุนเครื่องเป็นแนวนอน',
+  rotate_body: 'Pixel Agent Office ใช้งานในแนวนอน — หมุนมือถือหรือแท็บเล็ตเพื่อใช้งานต่อ',
 };
 
 const DICTS: Record<Lang, Dict> = { en, th };

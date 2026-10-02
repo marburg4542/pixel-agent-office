@@ -91,7 +91,14 @@ export function TopBar({ onSignOut }: { onSignOut: () => void }) {
         <button className={`btn dark sm ${paused ? 'on' : ''}`} onClick={togglePause} title={paused ? t('play') : t('pause')}>
           <PixelIcon name={paused ? 'play' : 'pause'} /> <span className="tb-label">{paused ? t('play') : t('pause')}</span>
         </button>
-        <span className="seg desktop-only" aria-label={t('speed')}>
+        <button
+          className="btn dark sm compact-only"
+          onClick={() => setSpeed(SIM_SPEEDS[(SIM_SPEEDS.indexOf(speed) + 1) % SIM_SPEEDS.length])}
+          aria-label={`${t('speed')} ×${speed}`}
+        >
+          ×{speed}
+        </button>
+        <span className="seg desktop-only speed-seg" aria-label={t('speed')}>
           {SIM_SPEEDS.map((n) => (
             <button key={n} className={`btn dark sm ${speed === n ? 'on' : ''}`} onClick={() => setSpeed(n)}>
               ×{n}

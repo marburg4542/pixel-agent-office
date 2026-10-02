@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 export const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 
-dotenv.config({ path: path.join(SERVER_DIR, '.env'), quiet: true });
+// Tests set PAO_IGNORE_DOTENV so they never pick up the real server/.env (its email account above all).
+if (!process.env.PAO_IGNORE_DOTENV) dotenv.config({ path: path.join(SERVER_DIR, '.env'), quiet: true });
 
 // FRONTEND_URL may hold several comma-separated URLs (e.g. tunnel domain + LAN + GitHub Pages).
 // Used as the CORS allowlist and — first entry — as the base for links in emails.

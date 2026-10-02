@@ -23,6 +23,8 @@
 * { box-sizing: border-box; }
 
 html, body, #root { height: 100%; margin: 0; }
+/* iOS enlarges text in landscape unless told not to. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
 body {
   background: #1b1726;
@@ -173,7 +175,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .overlay {
   position: fixed; inset: 0; background: rgba(16, 10, 22, .55); display: flex; align-items: center; justify-content: center;
-  padding: 16px;
+  /* 16px, or more around notches and rounded corners (viewport-fit=cover) */
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
 }
 .window {
   background: var(--paper); border: 3px solid var(--ink); box-shadow: 6px 6px 0 rgba(10,6,14,.55);
@@ -351,18 +354,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .mlib-provider td { background: var(--panel-2); color: var(--text-light); font-weight: 700; }
 .num-in { width: 64px !important; }
 
-/* ─── Docked board drawer ─────────────────────────────── */
-
-:root { --drawer-w: min(900px, 58vw); }
-.overlay.drawer { background: transparent; pointer-events: none; justify-content: flex-end; align-items: stretch; padding: 0; top: var(--topbar-h, 52px); }
-.overlay.drawer > .window {
-  pointer-events: auto; width: var(--drawer-w); height: 100%; max-height: none; box-shadow: -6px 0 0 rgba(10,6,14,.45);
-  border-right: none; border-bottom: none;
-}
-body.board-docked .stage { margin-right: var(--drawer-w); }
-body.board-docked .sidebar { display: none; }
-.board-window.docked .board-main { grid-template-columns: repeat(5, minmax(150px, 1fr)) 200px; }
-.board-window.docked .card-title { font-size: 13px; }
 .quick-add { display: flex; gap: 4px; padding: 0 8px 8px; }
 .quick-add .input { padding: 3px 6px; font-size: 13px; }
 
@@ -513,8 +504,6 @@ input[type='range'] { accent-color: var(--blue); width: 180px; }
     display: flex; position: fixed; right: 0; top: var(--topbar-h, 52px); bottom: 0; z-index: 15; width: min(300px, 90vw);
     padding: 12px; background: #1b1726; border-left: 3px solid var(--ink);
   }
-  :root { --drawer-w: 100vw; }
-  body.board-docked .stage { margin-right: 0; }
   .creator { grid-template-columns: 1fr; }
 }
 @media (max-width: 720px) {
@@ -667,9 +656,9 @@ input[type='range'] { accent-color: var(--blue); width: 180px; }
 .pixel-cursors :is(input[type='text'], input[type='password'], input[type='email'], input[type='number'], input:not([type]), textarea) { cursor: text; }
 .pixel-cursors .btn:disabled { cursor: not-allowed; }
 
-/* ─── Phones: view & respond ───────────────────────────────────────────── */
+/* ─── Phones: view & respond (narrow upright windows; touch devices are asked to turn sideways) ── */
 .mobile-inbox { display: none; }
-@media (max-width: 760px) {
+@media (max-width: 760px) and (orientation: portrait) {
   .tb-label, .desktop-only, .brand-name { display: none !important; }
   .brand { font-size: 14px; }
   .tb-group { flex-wrap: wrap; }
@@ -688,8 +677,8 @@ input[type='range'] { accent-color: var(--blue); width: 180px; }
   .mob-item-text { display: grid; gap: 2px; min-width: 0; flex: 1; }
   .mob-item-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Windows take the whole screen */
-  .overlay:not(.drawer) { padding: 0; }
-  .overlay:not(.drawer) > .window { width: 100% !important; height: 100%; max-height: 100%; border-width: 0; box-shadow: none; }
+  .overlay { padding: 0; }
+  .overlay > .window { width: 100% !important; height: 100%; max-height: 100%; border-width: 0; box-shadow: none; }
   .window-foot { flex-wrap: wrap; }
   /* Board: swipe between columns */
   .board-main { grid-template-columns: repeat(6, 86vw) !important; scroll-snap-type: x mandatory; }
@@ -714,3 +703,45 @@ input[type='range'] { accent-color: var(--blue); width: 180px; }
 .room-tab.add { padding: 3px 8px; }
 .room-count { font-size: 11px; opacity: .75; }
 .room-input { width: 140px; padding: 2px 6px; }
+
+/* ─── Installed app & touch screens: landscape only ─────────────────────── */
+body { overscroll-behavior: none; }
+/* Notches and rounded corners (viewport-fit=cover). */
+.app { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+.btn, .room-tab, .ai-badge, .stage canvas { touch-action: manipulation; }
+.compact-only { display: none; }
+
+.rotate-hint { display: none; }
+@media (orientation: portrait) and (hover: none) and (pointer: coarse) {
+  .rotate-hint {
+    display: flex; position: fixed; inset: 0; z-index: 1000; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px; padding: 24px; text-align: center; background: #1b1726; color: var(--text-light);
+  }
+  .rotate-hint strong { font-size: 20px; }
+  .rotate-hint span { max-width: 280px; color: #c9bfd9; }
+  .rotate-hint svg { width: 80px; height: 80px; image-rendering: pixelated; animation: rotate-phone 2.4s ease-in-out infinite; }
+}
+@keyframes rotate-phone { 0%, 25% { transform: rotate(0deg); } 55%, 100% { transform: rotate(-90deg); } }
+@media (prefers-reduced-motion: reduce) { .rotate-hint svg { animation: none; transform: rotate(-90deg); } }
+
+/* Phones on their side: the laptop layout, tightened to fit ~360–430px of height. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .topbar { gap: 4px; padding: 3px 8px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; box-shadow: none; }
+  .topbar::-webkit-scrollbar { display: none; }
+  .topbar > * { flex-shrink: 0; }
+  .brand-name, .tb-label, .user-name, .speed-seg { display: none !important; }
+  .compact-only { display: inline-flex; }
+  .brand-logo { width: 22px; height: 22px; }
+  .tb-stats { gap: 8px; font-size: 12px; }
+  .tb-stats > span { display: none; }
+  .topbar .btn.sm { min-height: 30px; min-width: 32px; justify-content: center; }
+  .stage { padding: 4px; gap: 4px; }
+  .stage canvas { border-width: 2px; box-shadow: 0 0 0 2px #3b3552; }
+  .room-tab { font-size: 12px; padding: 1px 8px; }
+  /* Windows take the whole screen */
+  .overlay { padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+  .overlay > .window { width: 100% !important; height: 100%; max-height: 100%; border-width: 0; box-shadow: none; }
+  .titlebar { padding: 3px 6px 3px 10px; }
+  .window-body { padding: 10px 12px; }
+  .window-foot { flex-wrap: wrap; }
+}

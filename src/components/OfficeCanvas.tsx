@@ -7,6 +7,9 @@ import { renderBackground } from '../scene/office';
 import { hitTest, renderScene, type HoverTarget } from '../scene/render';
 import { ModelLabel, RoleLabel, useTicker } from './ui';
 
+/** Narrow and upright: the office sits above the inbox (landscape phones get the laptop layout). */
+const PORTRAIT_PHONE = '(max-width: 760px) and (orientation: portrait)';
+
 export function OfficeCanvas() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -26,7 +29,7 @@ export function OfficeCanvas() {
       const cs = getComputedStyle(wrap);
       const w = wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 12;
       // On phones the office sits above the inbox and grows with its width (the page scrolls).
-      const phone = window.matchMedia('(max-width: 760px)').matches;
+      const phone = window.matchMedia(PORTRAIT_PHONE).matches;
       const tabs = wrap.querySelector('.room-tabs')?.getBoundingClientRect().height ?? 0;
       const h = phone ? Infinity : wrap.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - 12 - tabs;
       const best = Math.min((w * dpr) / SCENE_W, (h * dpr) / SCENE_H);

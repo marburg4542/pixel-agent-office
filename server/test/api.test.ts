@@ -6,6 +6,8 @@ import crypto from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 
+// Never the real server/.env: tests must not send email or touch the real database.
+process.env.PAO_IGNORE_DOTENV = '1';
 process.env.DB_FILE = ':memory:';
 process.env.JWT_SECRET = crypto.randomBytes(48).toString('base64');
 process.env.ENCRYPTION_KEY = crypto.randomBytes(32).toString('base64');
