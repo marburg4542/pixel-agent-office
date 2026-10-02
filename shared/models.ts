@@ -1,4 +1,5 @@
-import type { ModelDef, ProviderId } from './types';
+import type { DiscoveredModel, ModelDef, ProviderId } from './types';
+import { OLLAMA_DEFAULT_CTX } from './constants';
 
 export interface ProviderInfo {
   id: ProviderId;
@@ -40,3 +41,28 @@ export const DEFAULT_MODELS: ModelDef[] = [
 
   { id: 'ollama-local', provider: 'ollama', apiId: 'llama3.3', name: 'Local model (Ollama)', speed: 3, quality: 2, priceIn: 0, priceOut: 0, note: 'Example — set apiId to a model you have pulled' },
 ];
+
+/**
+ * A library entry for a model picked in AI settings. Known models keep their catalog name, stats and
+ * prices; others get rough speed/quality from their name (or size, for Ollama) — editable later.
+ */
+export function guessModel(provider: ProviderId, d: DiscoveredModel): Partial<ModelDef> {
+  const base: Partial<ModelDef> = { provider, apiId: d.apiId, name: d.name || d.apiId, contextWindow: d.contextWindow, note: d.note };
+  const known = DEFAULT_MODELS.find((m) => m.provider === provider && m.apiId === d.apiId);
+  if (known) return { ...base, name: known.name, speed: known.speed, quality: known.quality, priceIn: known.priceIn, priceOut: known.priceOut };
+  if (provider === 'ollama') {
+    // "4.0B · Q4_K_M" or "qwen3:4b" → billions of parameters
+    const billions = Number(/(\d+(?:\.\d+)?)\s*b\b/i.exec(`${d.note ?? ''} ${d.apiId}`)?.[1]) || 0;
+    const speed = !billions ? 3 : billions <= 4.5 ? 4 : billions <= 9 ? 3 : 2;
+    return { ...base, speed, quality: billions >= 12 ? 3 : 2, priceIn: 0, priceOut: 0, numCtx: Math.min(OLLAMA_DEFAULT_CTX, d.contextWindow || OLLAMA_DEFAULT_CTX) };
+  }
+  const id = d.apiId.toLowerCase();
+  const [speed, quality] = /(nano|lite|mini|haiku|luna|small)/.test(id)
+    ? [5, 3]
+    : /(flash|sonnet|sol|medium|turbo)/.test(id)
+      ? [4, 4]
+      : /(opus|fable|astra|pro|ultra|large|max)/.test(id)
+        ? [2, 5]
+        : [3, 3];
+  return { ...base, speed, quality, priceIn: d.priceIn, priceOut: d.priceOut };
+}

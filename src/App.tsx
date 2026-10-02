@@ -11,6 +11,7 @@ import type { Workspace } from './types';
 import { TopBar } from './components/TopBar';
 import { OfficeCanvas } from './components/OfficeCanvas';
 import { MobileInbox } from './components/MobileInbox';
+import { RotateHint } from './components/RotateHint';
 import { Sidebar } from './components/Sidebar';
 import { ModalHost } from './components/ModalHost';
 import { Toasts } from './components/Toasts';
@@ -137,6 +138,7 @@ export function App() {
     <>
       {page}
       <Toasts />
+      <RotateHint />
     </>
   );
 }

@@ -9,7 +9,8 @@ import { CONNECTORS } from '../research/connectors';
 import * as arena from '../arena';
 import { statsFor } from '../stats';
 import { deleteKey, getKey, listKeys, setKey } from '../keys';
-import { testAiKey } from '../ai';
+import { ADAPTERS, testAiKey } from '../ai';
+import { toAiError } from '../ai/errors';
 import { usageSummary } from '../usage';
 import { sendTo } from '../events';
 import { keyProvider } from '../../shared/keys';
@@ -128,6 +129,30 @@ router.delete(
     return true;
   }),
 );
+
+/** Models the saved key can use, straight from the provider (AI settings → pick models). */
+router.get('/keys/:provider/models', async (req, res, next) => {
+  try {
+    const provider = String(req.params.provider) as ProviderId;
+    const adapter = ADAPTERS[provider];
+    if (!adapter?.listModels) {
+      res.status(400).json({ success: false, message: msg(req, 'ผู้ให้บริการนี้ดึงรายชื่อโมเดลไม่ได้', "This provider can't list models") });
+      return;
+    }
+    const key = getKey(req.user!.id, provider);
+    if (!key) {
+      res.status(404).json({ success: false, message: msg(req, 'ยังไม่ได้ใส่คีย์นี้', 'No key saved for this provider') });
+      return;
+    }
+    try {
+      res.json({ success: true, data: await adapter.listModels(key) });
+    } catch (e) {
+      res.status(400).json({ success: false, message: toAiError(e).message || 'failed' });
+    }
+  } catch (e) {
+    next(e);
+  }
+});
 
 /** Try the saved key with a cheap call. */
 router.post('/keys/:provider/test', async (req, res, next) => {

@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import type { KeyFields, ProviderAdapter, RunRequest, RunResult } from './types';
+import type { DiscoveredModel } from '../../shared/types';
 
 const client = (key: KeyFields) => new GoogleGenAI({ apiKey: key.key });
 
@@ -38,5 +39,15 @@ export const googleAdapter: ProviderAdapter = {
   async test(key) {
     const pager = await client(key).models.list({ config: { pageSize: 1 } });
     void pager.page;
+  },
+
+  async listModels(key) {
+    const out: DiscoveredModel[] = [];
+    const pager = await client(key).models.list({ config: { pageSize: 100 } });
+    for await (const m of pager) {
+      if (!m.name || !/gemini/i.test(m.name) || (m.supportedActions && !m.supportedActions.includes('generateContent'))) continue;
+      out.push({ apiId: m.name.replace(/^models\//, ''), name: m.displayName || m.name, contextWindow: m.inputTokenLimit });
+    }
+    return out;
   },
 };

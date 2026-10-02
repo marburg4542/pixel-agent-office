@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { useStore, useT } from '../store';
 import { api, assetUrl } from '../lib/api';
 import { session } from '../lib/session';
@@ -7,14 +7,14 @@ import { play } from '../lib/sound';
 import { shrinkAvatar } from '../lib/image';
 import { downloadText, slug } from '../lib/files';
 import { desktopNotify } from '../lib/officeHooks';
-import { tokenCount, usd } from '../util';
 import { useUsernameCheck, usernameHintClass } from '../lib/useUsernameCheck';
 import { usernameHint, validatePassword } from '../../shared/credentialPolicy';
-import { KEY_PROVIDERS, type KeyProviderDef } from '../../shared/keys';
+import { KEY_PROVIDERS } from '../../shared/keys';
 import type { ApiKeyStatus, PublicUser, SettingsTab } from '../types';
 import { PasswordStrength } from './auth/PasswordStrength';
 import { UserAvatar, Window } from './ui';
 import { PixelIcon } from './PixelIcon';
+import { KeyRow } from './KeyRow';
 
 export function SettingsWindow({ z, onClose, tab: initialTab }: { z: number; onClose: () => void; tab?: SettingsTab }) {
   const t = useT();
@@ -22,15 +22,14 @@ export function SettingsWindow({ z, onClose, tab: initialTab }: { z: number; onC
   return (
     <Window z={z} width={720} title={<><PixelIcon name="gear" /> {t('settings')}</>} onClose={onClose}>
       <div className="tabs" role="tablist">
-        {(['profile', 'sound', 'ai', 'keys', 'data'] as SettingsTab[]).map((k) => (
+        {(['profile', 'sound', 'keys', 'data'] as SettingsTab[]).map((k) => (
           <button key={k} role="tab" aria-selected={tab === k} className={`tab ${tab === k ? 'on' : ''}`} onClick={() => setTab(k)}>
-            {{ profile: `👤 ${t('set_profile')}`, sound: `🔊 ${t('set_sound')}`, ai: `🤖 ${t('set_ai')}`, keys: `🔑 ${t('set_keys')}`, data: `💾 ${t('set_data')}` }[k]}
+            {{ profile: `👤 ${t('set_profile')}`, sound: `🔊 ${t('set_sound')}`, keys: `📡 ${t('set_keys')}`, data: `💾 ${t('set_data')}` }[k]}
           </button>
         ))}
       </div>
       {tab === 'profile' && <ProfileTab />}
       {tab === 'sound' && <SoundTab />}
-      {tab === 'ai' && <AiTab />}
       {tab === 'keys' && <KeysTab />}
       {tab === 'data' && <DataTab />}
     </Window>
@@ -346,198 +345,33 @@ function DataTab() {
   );
 }
 
-// ─── Real AI: on/off, budget, spending ───────────────────────────────────────
-
-
-function AiTab() {
-  const t = useT();
-  const settings = useStore((s) => s.settings);
-  const updateSettings = useStore((s) => s.updateSettings);
-  const usage = useStore((s) => s.usage);
-  const refreshUsage = useStore((s) => s.refreshUsage);
-  const [budget, setBudget] = useState(String(settings.budgetUsd || ''));
-  useEffect(() => {
-    void refreshUsage().catch(() => {});
-  }, [refreshUsage]);
-
-  const saveBudget = () => {
-    const n = Math.max(0, Math.round((Number(budget) || 0) * 100) / 100);
-    setBudget(n ? String(n) : '');
-    if (n !== settings.budgetUsd) void updateSettings({ budgetUsd: n });
-  };
-  const real = settings.aiMode === 'auto';
-
-  return (
-    <div>
-      <div className="field">
-        <label>🤖 {t('set_aiMode')}</label>
-        <span className="row">
-          <button className={`btn ${real ? 'primary' : ''}`} aria-pressed={real} onClick={() => void updateSettings({ aiMode: 'auto' })}>⚡ {t('on')}</button>
-          <button className={`btn ${!real ? 'primary' : ''}`} aria-pressed={!real} onClick={() => void updateSettings({ aiMode: 'sim' })}>🎲 {t('off')}</button>
-        </span>
-        <div className="hint">{t('set_aiModeHint')}</div>
-      </div>
-      <div className="field">
-        <label htmlFor="budget">💰 {t('set_budget')}</label>
-        <input
-          id="budget"
-          className="input"
-          style={{ maxWidth: 160 }}
-          type="number"
-          min={0}
-          step={1}
-          inputMode="decimal"
-          placeholder="0"
-          value={budget}
-          onChange={(e) => setBudget(e.target.value)}
-          onBlur={saveBudget}
-          onKeyDown={(e) => e.key === 'Enter' && saveBudget()}
-        />
-        <div className="hint">{t('set_budgetHint')}</div>
-      </div>
-
-      <div className="section-title">📊 {t('set_usage')} {usage.month && <span className="hint">({usage.month})</span>}</div>
-      {settings.budgetUsd > 0 && (
-        <div className="budget-bar" title={t('set_budgetLeft', { left: usd(Math.max(0, settings.budgetUsd - usage.costUsd)), budget: usd(settings.budgetUsd) })}>
-          <div className={`budget-fill ${usage.costUsd >= settings.budgetUsd ? 'over' : ''}`} style={{ width: `${Math.min(100, (usage.costUsd / settings.budgetUsd) * 100)}%` }} />
-          <span>{t('set_budgetLeft', { left: usd(Math.max(0, settings.budgetUsd - usage.costUsd)), budget: usd(settings.budgetUsd) })}</span>
-        </div>
-      )}
-      {usage.calls === 0 ? (
-        <p className="hint">{t('set_usageEmpty')}</p>
-      ) : (
-        <table className="usage-table">
-          <tbody>
-            {usage.byModel.map((m) => (
-              <tr key={m.modelId}>
-                <td>{m.modelName}</td>
-                <td className="num">{t('set_usageCalls', { n: m.calls })}</td>
-                <td className="num hint">{tokenCount(m.tokensIn)} / {tokenCount(m.tokensOut)}</td>
-                <td className="num">{usd(m.costUsd)}</td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td>{t('set_usageTotal')}</td>
-              <td className="num">{t('set_usageCalls', { n: usage.calls })}</td>
-              <td className="num hint">{tokenCount(usage.tokensIn)} / {tokenCount(usage.tokensOut)}</td>
-              <td className="num"><strong>{usd(usage.costUsd)}</strong></td>
-            </tr>
-          </tfoot>
-        </table>
-      )}
-      <p className="hint">{t('set_usageNote')}</p>
-    </div>
-  );
-}
-
-// ─── Own API keys ────────────────────────────────────────────────────────────
+// ─── Keys for research data sources (AI keys live in AI settings) ───────────
 
 function KeysTab() {
   const t = useT();
   const keys = useStore((s) => s.keys);
   const setKeys = useStore((s) => s.setKeys);
+  const openModal = useStore((s) => s.openModal);
   const status = (id: string) => keys.find((k) => k.provider === id);
   const onChange = (s: ApiKeyStatus) => setKeys(keys.map((k) => (k.provider === s.provider ? s : k)));
 
   return (
     <div>
-      <p className="hint" style={{ marginTop: 0 }}>🔐 {t('keys_hint')}</p>
-      {(['ai', 'data'] as const).map((group) => (
-        <div key={group}>
-          <div className="section-title">{group === 'ai' ? `🤖 ${t('keys_ai')}` : `📡 ${t('keys_data')}`}</div>
-          {group === 'data' && <p className="hint" style={{ marginTop: -4 }}>{t('keys_dataHint')}</p>}
-          <div className="key-list">
-            {KEY_PROVIDERS.filter((p) => p.group === group).map((p) => (
-              <KeyRow key={p.id} def={p} status={status(p.id)} onChange={onChange} />
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function KeyRow({ def, status, onChange }: { def: KeyProviderDef; status?: ApiKeyStatus; onChange: (s: ApiKeyStatus) => void }) {
-  const t = useT();
-  const lang = useStore((s) => s.settings.lang);
-  const [open, setOpen] = useState(false);
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
-
-  const save = async () => {
-    setBusy(true);
-    try {
-      onChange(await api<ApiKeyStatus>(`/keys/${def.id}`, { method: 'PUT', body: values }));
-      setValues({});
-      setOpen(false);
-      toast.success(t('keys_saved', { name: def.name }));
-    } catch {
-      /* shown */
-    } finally {
-      setBusy(false);
-    }
-  };
-  const test = async () => {
-    setBusy(true);
-    try {
-      const r = await api<{ ok: boolean; error: string | null }>(`/keys/${def.id}/test`, { method: 'POST' });
-      if (r.ok) toast.success(t('keys_testOk', { name: def.name }));
-      else toast.error(t('keys_testFail', { name: def.name, error: r.error ?? '?' }));
-    } catch {
-      /* shown */
-    } finally {
-      setBusy(false);
-    }
-  };
-  const remove = async () => {
-    setBusy(true);
-    try {
-      await api(`/keys/${def.id}`, { method: 'DELETE' });
-      onChange({ provider: def.id, configured: false, hint: '' });
-    } catch {
-      /* shown */
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="key-row">
-      <div className="key-head">
-        <strong>{def.name}</strong>
-        {status?.configured ? <span className="chip key-ok">✓ {status.hint}</span> : <span className="chip">{t('keys_notSet')}</span>}
-        <span style={{ marginLeft: 'auto' }} className="row">
-          <a href={def.url} target="_blank" rel="noreferrer" className="link hint">{t('keys_getOne')} ↗</a>
-          {status?.configured && (
-            <button className="btn sm" disabled={busy} onClick={() => void test()}>{busy ? t('keys_testing') : `🔌 ${t('keys_test')}`}</button>
-          )}
-          <button className="btn sm" onClick={() => setOpen(!open)}>{status?.configured ? t('keys_replace') : t('keys_add')}</button>
-          {status?.configured && (
-            <button className="btn sm danger" disabled={busy} onClick={() => void remove()}>🗑</button>
-          )}
-        </span>
+      <div className="ais-callout">
+        <span>🤖 {t('keys_aiMoved')}</span>
+        <button className="btn sm primary" onClick={() => openModal({ kind: 'aiSettings' })}>
+          <PixelIcon name="chip" /> {t('aiSettings')}
+        </button>
       </div>
-      {def.note && <div className="hint">{def.note[lang]}</div>}
-      {open && (
-        <div className="key-form">
-          {def.fields.map((f) => (
-            <input
-              key={f.name}
-              className="input"
-              type={f.secret ? 'password' : 'text'}
-              autoComplete="off"
-              placeholder={`${f.label[lang]}${f.placeholder ? ` (${f.placeholder})` : ''}`}
-              value={values[f.name] ?? ''}
-              onChange={(e) => setValues({ ...values, [f.name]: e.target.value })}
-            />
-          ))}
-          <button className="btn primary sm" disabled={busy || def.fields.some((f) => !values[f.name]?.trim())} onClick={() => void save()}>
-            💾 {t('save')}
-          </button>
-        </div>
-      )}
+      <p className="hint">🔐 {t('keys_hint')}</p>
+      <div className="section-title">📡 {t('keys_data')}</div>
+      <p className="hint" style={{ marginTop: -4 }}>{t('keys_dataHint')}</p>
+      <div className="key-list">
+        {KEY_PROVIDERS.filter((p) => p.group === 'data').map((p) => (
+          <KeyRow key={p.id} def={p} status={status(p.id)} onChange={onChange} />
+        ))}
+      </div>
     </div>
   );
 }
+

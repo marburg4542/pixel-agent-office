@@ -11,6 +11,7 @@ export type Modal =
   | { kind: 'agentEdit'; agentId?: string; desk?: number; room?: number }
   | { kind: 'agent'; agentId: string }
   | { kind: 'models' }
+  | { kind: 'aiSettings' }
   | { kind: 'settings'; tab?: SettingsTab }
   | { kind: 'users' }
   | { kind: 'help'; step?: number }
@@ -19,4 +20,4 @@ export type Modal =
   | { kind: 'stats' }
   | { kind: 'confirm'; message: string; onYes: () => void; danger?: boolean };
 
-export type SettingsTab = 'profile' | 'sound' | 'ai' | 'keys' | 'data';
+export type SettingsTab = 'profile' | 'sound' | 'keys' | 'data';

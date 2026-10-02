@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { AiError, type KeyFields, type ProviderAdapter, type RunRequest, type RunResult } from './types';
+import type { DiscoveredModel } from '../../shared/types';
 
 // Opus 5 / Fable 5.1 can decline a request via safety classifiers; server-side fallbacks re-run it on
 // Anthropic's recommended model for that refusal category instead of returning the refusal.
@@ -63,5 +64,11 @@ export const anthropicAdapter: ProviderAdapter = {
 
   async test(key) {
     await client(key).models.list({ limit: 1 });
+  },
+
+  async listModels(key) {
+    const out: DiscoveredModel[] = [];
+    for await (const m of client(key).models.list({ limit: 100 })) out.push({ apiId: m.id, name: m.display_name || m.id });
+    return out;
   },
 };

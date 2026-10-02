@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { ColumnId, Note, Scope, Task } from '../types';
 import { findAnyAgent, useStore, useT, useTeam } from '../store';
 import { COLUMN_COLORS, PRIORITY_COLORS } from '../scene/office';
@@ -21,25 +21,6 @@ export function BoardModal({ z, onClose }: { z: number; onClose: () => void }) {
   const [filter, setFilter] = useState<string>('');
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropCol, setDropCol] = useState<ColumnId | null>(null);
-  const [docked, setDocked] = useState(() => {
-    try {
-      return localStorage.getItem('pao.boardDocked') !== '0';
-    } catch {
-      return true;
-    }
-  });
-
-  // Docked: the office shrinks to the left so agents stay visible while you manage tasks.
-  useEffect(() => {
-    try {
-      localStorage.setItem('pao.boardDocked', docked ? '1' : '0');
-    } catch {
-      /* private mode */
-    }
-    if (!docked) return;
-    document.body.classList.add('board-docked');
-    return () => document.body.classList.remove('board-docked');
-  }, [docked]);
 
   const inScope = <T extends { scope: Scope }>(x: T) => scope === 'all' || x.scope === scope;
   const visible = tasks.filter(inScope).filter((x) => !filter || x.pipeline.includes(filter));
@@ -51,14 +32,8 @@ export function BoardModal({ z, onClose }: { z: number; onClose: () => void }) {
       z={z}
       title={<><PixelIcon name="board" /> {t('board')}</>}
       onClose={onClose}
-      className={`board-window ${docked ? 'docked' : ''}`}
+      className="board-window"
       bodyClassName="board-body"
-      variant={docked ? 'drawer' : 'modal'}
-      actions={
-        <button className="btn dark sm" onClick={() => setDocked(!docked)} title={docked ? t('boardExpand') : t('boardDock')}>
-          {docked ? `⛶ ${t('boardExpand')}` : `⇥ ${t('boardDock')}`}
-        </button>
-      }
     >
       <div className="board-toolbar">
         <button className="btn primary" onClick={() => openModal({ kind: 'taskEdit', preset: scope === 'shared' ? { scope: 'shared' } : undefined })}>＋ {t('newTask')}</button>

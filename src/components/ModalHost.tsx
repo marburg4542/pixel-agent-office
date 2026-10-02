@@ -6,6 +6,7 @@ import { AgentDetail } from './AgentDetail';
 import { AgentEditor } from './AgentEditor';
 import { BoardModal } from './BoardModal';
 import { ModelLibrary } from './ModelLibrary';
+import { AiSettingsWindow } from './AiSettingsWindow';
 import { NoteEditor } from './NoteEditor';
 import { TaskDetail } from './TaskDetail';
 import { TaskEditor } from './TaskEditor';
@@ -81,6 +82,8 @@ function ModalView({ modal, z }: { modal: Modal; z: number }) {
       return <AgentDetail z={z} onClose={onClose} agentId={modal.agentId} />;
     case 'models':
       return <ModelLibrary z={z} onClose={onClose} />;
+    case 'aiSettings':
+      return <AiSettingsWindow z={z} onClose={onClose} />;
     case 'settings':
       return <SettingsWindow z={z} onClose={onClose} tab={modal.tab} />;
     case 'users':
